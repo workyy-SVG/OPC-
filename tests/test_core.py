@@ -43,3 +43,16 @@ def test_ui():
  a.button[0].click().run(timeout=60);assert not a.exception
  assert len(a.markdown)>2
 
+
+
+def test_uci_sample_provenance():
+ import json,hashlib
+ from pathlib import Path
+ meta=json.loads(Path('data/demo/manifest.json').read_text(encoding='utf-8'))
+ raw=Path('data/demo/orders.csv').read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==meta['sample_sha256']
+ d=pd.read_csv('data/demo/orders.csv',dtype=str)
+ assert len(d)==meta['rows'] and d.sku.nunique()==20
+ assert 'line_id' not in d and 'Customer ID' not in d
+ assert d.order_at.min()>=meta['start'] and d.order_at.max()<=meta['end']
+ assert d.order_id.str.startswith('C').any()

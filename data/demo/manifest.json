@@ -1,0 +1,59 @@
+{
+  "dataset": "UCI Online Retail II",
+  "creator": "Daqing Chen",
+  "citation": "Chen, D. (2012). Online Retail II [Dataset]. UCI Machine Learning Repository.",
+  "doi": "https://doi.org/10.24432/C5CG6D",
+  "source": "https://archive.ics.uci.edu/dataset/502/online+retail+ii",
+  "license": "CC BY 4.0",
+  "download_date": "2026-11-03",
+  "sheet": "Year 2009-2010",
+  "start": "2010-01-01",
+  "end": "2010-06-30",
+  "training": [
+    "2010-01-01",
+    "2010-03-31"
+  ],
+  "calibration": [
+    "2010-04-01",
+    "2010-04-30"
+  ],
+  "test": [
+    "2010-05-01",
+    "2010-06-30"
+  ],
+  "sku_count": 20,
+  "rows": 5556,
+  "selected_skus": [
+    "37410",
+    "21091",
+    "21085",
+    "85123A",
+    "21099",
+    "21980",
+    "21092",
+    "21212",
+    "21984",
+    "85220",
+    "21982",
+    "21981",
+    "20993",
+    "84991",
+    "85099B",
+    "84077",
+    "84568",
+    "21977",
+    "20991",
+    "47503E"
+  ],
+  "selection": "Top 20 by positive non-cancelled training-period units; five-digit product codes with optional letter suffix",
+  "removed_fields": [
+    "Customer ID",
+    "Country",
+    "Description"
+  ],
+  "transforms": "Date reduced to calendar day; cancellations and negative quantities retained for quality checks; no line IDs invented; no sales generated",
+  "coverage_assumption": "Full published transaction extract treated as complete calendar-day coverage, including zero-sale days; not independently verified store opening records",
+  "zip_sha256": "572e36277c2390fbfde10664750731e0a86f55e33470d91919085f0408e67bfb",
+  "xlsx_sha256": "bcbe73b35f5b7babf197fb0cb983a11f5d9ff929078d4aa53d171b1f2df2e980",
+  "sample_sha256": "8f8f5219d28ecec3dc6b750401469c864e0853806624cde018a4da9f25eb5304"
+}
