@@ -1,0 +1,21 @@
+{
+  "config": {
+    "start": "2010-06-01",
+    "end": "2010-06-30",
+    "lead_days": 3,
+    "initial_stock": 20
+  },
+  "skus": [
+    "21212",
+    "21977",
+    "85099B"
+  ],
+  "ci": {
+    "difference": 0.18759580204408477,
+    "low": 0.13711911357340711,
+    "high": 0.24697486813527758,
+    "n": 3
+  },
+  "sample_sha256": "8f8f5219d28ecec3dc6b750401469c864e0853806624cde018a4da9f25eb5304",
+  "scope": "3 SKU x 30 days smoke experiment, not confirmatory evidence"
+}
