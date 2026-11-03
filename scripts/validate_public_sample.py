@@ -16,6 +16,7 @@ from core.replay import run_replay
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--sku', help='Optional training-selected SKU; do not tune by test performance')
+    parser.add_argument('--matrix', action='store_true', help='Compare a fixed 2x2x2 scenario matrix')
     args = parser.parse_args()
     raw = pd.read_csv(ROOT / 'data/demo/orders.csv', dtype=str)
     clean, issues, summary = parse_orders(raw)
@@ -41,6 +42,12 @@ def main():
     (output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     timeline.to_csv(output / 'timeline.csv', index=False)
     metrics.to_csv(output / 'metrics.csv', index=False)
+    if args.matrix:
+        from core.validation import sensitivity, compare_scenarios
+        scenarios=sensitivity(daily[daily.sku==sku],config,[20,100],[2,7],[1,6])
+        scenarios.to_csv(output/'scenario_metrics.csv',index=False)
+        compare_scenarios(scenarios).to_csv(output/'scenario_comparisons.csv',index=False)
+        (output/'scenario_manifest.json').write_text(json.dumps(dict(sku=sku,config=config,initial_stocks=[20,100],lead_days=[2,7],pack_sizes=[1,6],data_hash=manifest['sample_sha256'],evidence_type='Simulated sensitivity experiment; not merchant-observed outcomes'),ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

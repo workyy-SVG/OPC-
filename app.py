@@ -9,6 +9,7 @@ from core.demand import build_daily
 from core.policy import recommend
 from core.replay import run_replay
 from core.export import csv_bytes
+from core.validation import parameter_status, sensitivity, compare_scenarios
 st.set_page_config(page_title='小店补货助手',page_icon='📦',layout='wide')
 st.markdown('<style>.stApp{background:#f6f8fb}h1{color:#173d38}div[data-testid="stMetric"]{background:white;padding:20px;border-radius:14px}</style>',unsafe_allow_html=True)
 st.markdown("""<style>
@@ -26,6 +27,8 @@ st.sidebar.caption('让每一件补货，都有据可查')
 def navigate(target): st.session_state['navigation']=target
 page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','使用指南','数据与说明'],key='navigation')
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
+usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
+st.caption('当前模式：'+usage_mode+' · 真实订单不等于真实库存；回放结果始终是模拟。')
 st.title(page)
 HEADINGS={
 '经营总览':('今天的经营，从这里开始','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
@@ -47,7 +50,10 @@ with st.sidebar:
 LABELS={'order_id':'订单编号','sku':'商品编码','order_at':'销售日期','qty':'数量（件）','line_id':'订单行编号','status':'处理状态','on_hand':'现货数量（件）','on_order':'在途数量（件）','as_of':'库存快照日期','lead_days':'采购提前期（天）','pack_size':'每箱件数','min_order':'最小起订量（件）','arrival_confirmed':'确认在途按期到货','source':'参数来源','row_no':'原文件行号','reason_code':'问题类型','hint':'修正建议','policy':'补货策略','date':'日期','demand':'需求代理（件）','arrived':'当日到货（件）','order':'当日下单（件）','ending_stock':'期末现货（件）','shortage':'未满足需求（件）','review':'是否人工复核','fill_rate':'件数满足率','mean_stock':'平均期末库存（件）','stockout_rate':'缺货天数占比','review_rate':'人工复核率','orders':'下单次数','final_pipeline':'期末在途（件）','common_eligible_rate':'双方可自动建议日期占比','inventory_position':'库存位置（件）','forecast_lead':'交期内预测需求（件）','buffer':'误差缓冲（件）','target':'目标库存（件）','mean':'近28日日均销量','protection_days':'保护期（天）','window_start':'历史窗口起始日','window_end':'历史窗口结束日','sample_count':'有效历史天数','error_samples':'误差窗口数量','rule_version':'规则版本','run_id':'运行编号','reason_codes':'复核原因'}
 REASONS={'INVALID_FIELD':'必填内容缺失、日期格式不匹配或数量不是整数','CONFLICTING_LINE_ID':'同一订单行编号对应不同内容，请核对原订单','DUPLICATE_LINE':'重复订单行，已剔除','CANCELLED':'取消订单，不计入销量','RETURN':'退货单独统计，不冲减需求','NOT_COMPLETED':'未完成或零数量订单，不计入销量','NON_PRODUCT':'非商品记录，已排除','SUSPECT_DUPLICATE':'疑似重复但缺少行编号，保留并请人工核对','HISTORY_GAP':'最近28天覆盖不完整，请补齐销售记录并确认覆盖','INSUFFICIENT_ERROR_WINDOWS':'完整误差窗口不足20个，请增加更早的销售历史','ARRIVAL_UNCONFIRMED':'在途到货时间尚未确认，请在库存配置中核对','SNAPSHOT_DATE_MISMATCH':'库存日期与决策日期不一致，请更新库存快照','MISSING_STOCK':'缺少该商品库存，请导入库存配置'}
 def reason_text(code):
+    if code=='UNVERIFIED_PARAMETERS': return '尚未确认实际盘点参数：请填写真实来源、选择实际盘点并逐项核实。'
     return REASONS.get(code, '请检查'+LABELS.get(code.removeprefix('INVALID_').lower(),code)+'是否为有效非负整数')
+
+LABELS.update({'parameter_kind':'参数性质','verified':'用户已核实声明','evidence_type':'结果证据类型','scenario':'条件编号','initial_stock':'初始库存（件）'})
 def chinese(df):
     result=df.copy()
     if 'policy' in result: result['policy']=result.policy.replace({'baseline':'固定比例缓冲','adaptive':'历史误差缓冲'})
@@ -168,7 +174,7 @@ else:
     if daily.empty: st.warning('没有可用商品');st.stop()
     as_of=daily[daily.coverage_status=='confirmed'].date.max()+pd.Timedelta(days=1)
     if 'inventory' not in st.session_state:
-        st.session_state.inventory=pd.DataFrame([dict(sku=s,as_of=str(as_of.date()),on_hand=10,on_order=0,lead_days=3,pack_size=6,min_order=0,arrival_confirmed=True,source='合成演示参数') for s in daily.sku.unique()])
+        st.session_state.inventory=pd.DataFrame([dict(sku=s,as_of=str(as_of.date()),on_hand=10,on_order=0,lead_days=3,pack_size=6,min_order=0,arrival_confirmed=True,source='合成演示参数',parameter_kind='演示假设',verified=False) for s in daily.sku.unique()])
     if page=='库存配置':
         st.caption('02 / 库存快照必须与决策日期一致：'+str(as_of.date()))
         section('填写商品库存与采购约束','选择商品，修改下方字段并保存。保存后进入补货清单即可重新计算。商品编码不能编辑；库存快照日期请使用上方提示日期。')
@@ -180,7 +186,13 @@ else:
         f=st.file_uploader('批量导入库存 CSV',type='csv')
         if f and st.button('应用库存文件'):
             try:
-                inv=pd.read_csv(f,dtype=str).rename(columns={v:k for k,v in LABELS.items()});inv['arrival_confirmed']=inv['arrival_confirmed'].map({'是':True,'否':False,'True':True,'False':False});assert set(template.columns)<=set(inv.columns);assert not inv.sku.duplicated().any();st.session_state.inventory=inv
+                inv=pd.read_csv(f,dtype=str).rename(columns={v:k for k,v in LABELS.items()})
+                inv['arrival_confirmed']=inv['arrival_confirmed'].map({'是':True,'否':False,'True':True,'False':False})
+                inv['parameter_kind']=inv.get('parameter_kind','未核实')
+                inv['verified']=False  # Uploaded claims must be confirmed again in this session.
+                assert set(template.columns)<=set(inv.columns);assert not inv.sku.duplicated().any()
+                st.session_state.inventory=inv
+                st.info('导入参数均已重置为未确认，请逐商品核对来源后保存。')
             except Exception: st.error('库存字段不完整或商品编码重复')
         chosen=st.selectbox('选择要修改的商品',st.session_state.inventory.sku.tolist())
         idx=st.session_state.inventory.index[st.session_state.inventory.sku==chosen][0]
@@ -193,6 +205,9 @@ else:
             changes['as_of']=st.text_input('库存快照日期（年-月-日）',str(row['as_of']))
             changes['arrival_confirmed']=st.checkbox('我确认在途商品可按期到货',value=bool(row['arrival_confirmed']))
             changes['source']=st.text_input('参数来源',str(row['source']))
+            changes['parameter_kind']=st.selectbox('参数性质',['演示假设','实际盘点','未核实'],index=['演示假设','实际盘点','未核实'].index(row.get('parameter_kind','未核实')) if row.get('parameter_kind','未核实') in ['演示假设','实际盘点','未核实'] else 2)
+            changes['verified']=st.checkbox('我已对照当日盘点和采购凭据核实以上全部参数',value=False)
+            st.caption('实际来源示例：盘点表编号、盘点日期、供应商报价单编号。勾选只是用户声明，不是第三方验证。')
             if st.form_submit_button('保存该商品配置',type='primary'):
                 for k,v in changes.items(): st.session_state.inventory.loc[idx,k]=v
                 st.success('已保存。进入补货清单即可查看更新后的建议。')
@@ -201,7 +216,8 @@ else:
     elif page=='补货清单':
         section('本次补货建议','建议下单：存在库存缺口；暂不补货：当前库存位置已达到目标；人工复核：信息不足，暂不给出数量。')
         st.caption('每次进入本页均按当前库存重新计算。请先核对参数来源，再导出清单。')
-        decisions=[recommend(g,st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, {},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
+        st.warning('演示模式的建议不能直接用于真实采购。实际采购准备模式也须由经营者审核，未验证经营成效。')
+        decisions=[recommend(g,st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, {'require_actual':usage_mode=='实际采购准备'},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
         out=pd.DataFrame(decisions)
         out=out.assign(_priority=out.status.map({'人工复核':0,'建议下单':1,'暂不补货':2})).sort_values('_priority').drop(columns='_priority')
         cols=st.columns(3)
@@ -223,6 +239,7 @@ else:
                 table_view(pd.DataFrame(evidence))
         download('导出待人工确认清单',chinese(filtered),'replenishment.csv')
     elif page=='策略回放':
+        st.warning('所有回放均使用假设库存和采购条件；历史成交量无法还原未记录的缺货失销量，不代表商户实测效果。')
         section('设置公平的对照实验','使用同一商品、同一测试日期、同一初始库存与交期，对比固定比例缓冲和历史误差缓冲。测试前需保留足够历史作为预热。')
         with st.expander('回放如何计算？',expanded=True):
             st.write('每天依次执行：接收当天到货 → 仅使用昨天及以前的销售生成建议 → 登记未来到货 → 按当天需求扣减库存。未满足需求不结转；人工复核当天不新增采购。')
@@ -249,6 +266,33 @@ else:
                 table_view(chinese(timeline),hide_index=True)
                 buf=io.BytesIO()
                 with zipfile.ZipFile(buf,'w') as z:
-                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=saved_cfg,sku=saved_sku,data_hash=st.session_state.data_hash,version='1.0.0'),ensure_ascii=False,indent=2))
+                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=saved_cfg,sku=saved_sku,data_hash=st.session_state.data_hash,version='1.0.0',evidence_type='模拟回放，不是商户实测',inventory='假设参数',demand='历史销量代理，不含未记录的失销量'),ensure_ascii=False,indent=2))
                 st.download_button('导出可复现实验 ZIP',buf.getvalue(),'experiment.zip')
             except ValueError as e: st.error(str(e))
+        st.subheader('多条件稳健性检查')
+        st.caption('固定当前商品及测试区间，最多8组组合。保留不理想结果，不按测试表现自动选参数。')
+        stocks=st.multiselect('比较的初始库存（件）',[0,20,100,300],default=[20,100])
+        leads=st.multiselect('比较的交期（天）',[2,4,7],default=[2,7])
+        packs=st.multiselect('比较的箱规（件）',[1,6,12],default=[1,6])
+        scenario_cfg=dict(start=str(dates[0]),end=str(dates[1])) if len(dates)==2 else None
+        if st.button('运行多条件检查'):
+            try:
+                if scenario_cfg is None: raise ValueError('请先选择完整测试区间')
+                with st.spinner('逐条件回放，两策略使用相同输入…'):
+                    scenarios=sensitivity(g,scenario_cfg,stocks,leads,packs)
+                    comparisons=compare_scenarios(scenarios)
+                st.session_state.scenario_result=(scenarios,comparisons,dict(sku=sku,config=scenario_cfg,stocks=stocks,leads=leads,packs=packs,data_hash=st.session_state.data_hash))
+            except ValueError as e: st.error(str(e))
+        if 'scenario_result' in st.session_state:
+            scenarios,comparisons,scfg=st.session_state.scenario_result
+            current=dict(sku=sku,config=scenario_cfg,stocks=stocks,leads=leads,packs=packs,data_hash=st.session_state.data_hash)
+            if current!=scfg: st.warning('输入已变，下方保留旧条件结果；重新运行才会更新。')
+            st.caption('结果商品：'+scfg['sku']+'；区间：'+str(scfg['config']))
+            table_view(chinese(scenarios),hide_index=True)
+            table_view(comparisons.rename(columns={'scenario':'条件编号','fill_delta':'满足率差（自适应减基线）','inventory_delta':'平均库存差（件）','conclusion':'本条件观察'}),hide_index=True)
+            package=io.BytesIO()
+            with zipfile.ZipFile(package,'w') as z:
+                z.writestr('scenario_metrics.csv',csv_bytes(scenarios))
+                z.writestr('comparisons.csv',csv_bytes(comparisons))
+                z.writestr('manifest.json',json.dumps(dict(**scfg,evidence_type='模拟敏感性实验，不能替代真实商户验证',lost_sales='原始订单未提供真实缺货失销量'),ensure_ascii=False,indent=2))
+            st.download_button('导出全部条件与实验说明',package.getvalue(),'sensitivity-experiment.zip')
