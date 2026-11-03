@@ -28,7 +28,7 @@ def parse_orders(raw, mapping=None, date_format='%Y-%m-%d'):
         if not reason and (d['qty']==0 or str(d.get('status','completed')).lower() not in ['','completed','complete','已完成']): reason='NOT_COMPLETED'
         if not reason and d['sku'] in ['POST','D','M','C2','DOT','BANK CHARGES']: reason='NON_PRODUCT';category='excluded'
         if reason:
-            summary[category]+=1;issues.append(dict(row_no=i+2,reason_code=reason,hint='核对原始记录后重新导入',**r.to_dict()));continue
+            summary[category]+=1;issues.append(dict(row_no=i+2,reason_code=reason,hint=('修正原始记录后重新导入' if reason in ['INVALID_FIELD','CONFLICTING_LINE_ID'] else '已按规则处理，无需为此修改原始记录'),**r.to_dict()));continue
         clean.append(d);summary['valid']+=1
     out=pd.DataFrame(clean,columns=df.columns)
     if len(out) and 'line_id' not in df:

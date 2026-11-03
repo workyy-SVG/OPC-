@@ -22,7 +22,7 @@ def table_view(df, **kwargs):
         frame=frame.iloc[(page-1)*20:page*20]
     st.caption(f'共 {count} 条记录'+(' · 可横向滚动查看完整字段' if len(columns)>5 else ''))
     if not columns: st.info('请在表格工具中至少选择一列。');return
-    html=frame[columns].fillna('—').to_html(index=False,escape=True,border=0,classes='cn-table')
+    html=frame[columns].astype(object).fillna('—').to_html(float_format=lambda v:f'{v:,.2f}',index=False,escape=True,border=0,classes='cn-table')
     st.markdown('<div class="table-shell">'+html+'</div>',unsafe_allow_html=True)
 
 def date_range(label,value):

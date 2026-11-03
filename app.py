@@ -25,9 +25,9 @@ apply_theme()
 st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
 def navigate(target): st.session_state['navigation']=target
-page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','使用指南','数据与说明'],key='navigation')
+page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
-usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
+usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],key='usage_mode',help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
 st.caption('当前模式：'+usage_mode+' · 真实订单不等于真实库存；回放结果始终是模拟。')
 st.title(page)
 HEADINGS={
@@ -60,15 +60,29 @@ def chinese(df):
     if 'policy' in result: result['policy']=result.policy.replace({'baseline':'固定比例缓冲','adaptive':'历史误差缓冲'})
     if 'reason_code' in result: result['reason_code']=result.reason_code.map(reason_text)
     if 'status' in result: result['status']=result.status.replace({'completed':'已完成','complete':'已完成','cancelled':'已取消','canceled':'已取消'})
-    for col in ['arrival_confirmed','review']:
+    for col in ['arrival_confirmed','review','verified']:
         if col in result: result[col]=result[col].map(lambda v:'是' if v is True or str(v)=='True' else '否' if v is False or str(v)=='False' else v)
     if 'reason_codes' in result: result['reason_codes']=result.reason_codes.map(lambda codes:'；'.join(reason_text(c) for c in codes) if isinstance(codes,list) else codes)
+    for col in ['fill_rate','stockout_rate','review_rate','common_eligible_rate']:
+        if col in result: result[col]=result[col].map(lambda v: '不适用' if pd.isna(v) else f'{v:.1%}')
     return result.rename(columns=LABELS|{'unit_price':'单价','description':'商品描述'})
 def section(title,description):
     st.subheader(title);st.write(description)
 
 def download(label,df,name): st.download_button(label,csv_bytes(df),name,'text/csv')
+def quick_demo():
+    raw=Path('data/demo/orders.csv').read_bytes()
+    clean,issues,summary=parse_orders(pd.read_csv(io.BytesIO(raw),dtype=str))
+    daily=build_daily(clean,pd.date_range('2010-01-01','2010-06-30'))
+    for key in ['inventory','replay_result','scenario_result','study']:
+        st.session_state.pop(key,None)
+    st.session_state.update(raw=raw,daily=daily,issues=issues,summary=summary,
+        data_hash=hashlib.sha256(raw).hexdigest(),product_names={},usage_mode='演示探索',navigation='补货清单')
+
 if page=='经营总览':
+    st.write('导入销售和库存，查看该补哪些商品、补多少，以及计算原因。')
+    st.button('用示例立即体验',type='primary',on_click=quick_demo,disabled='daily' in st.session_state)
+    st.caption('示例使用公开交易与假设库存，自动进入演示模式；已有数据时请继续当前任务。')
     ready='daily' in st.session_state and not st.session_state.daily.empty
     cols=st.columns(4)
     cols[0].metric('管理商品',st.session_state.daily.sku.nunique() if ready else '—',help='来自当前已核验数据')
@@ -109,7 +123,7 @@ elif page=='导入与质检':
     if demo or upload:
         raw=Path('data/demo/orders.csv').read_bytes() if demo else upload.getvalue()
         if st.session_state.get('raw')!=raw:
-            for dependent in ['daily','inventory','issues','summary','replay_result','study','data_hash']:
+            for dependent in ['daily','inventory','issues','summary','replay_result','scenario_result','study','data_hash','product_names']:
                 st.session_state.pop(dependent,None)
         st.session_state['raw']=raw
     if 'raw' in st.session_state:
@@ -130,15 +144,23 @@ elif page=='导入与质检':
                 clean,issues,summary=parse_orders(df,mapping,fmt)
                 daily=build_daily(clean,pd.date_range(*coverage))
                 st.session_state.update(daily=daily,issues=issues,summary=summary,data_hash=hashlib.sha256(st.session_state.raw).hexdigest())
-                st.session_state.pop('inventory',None)
+                st.session_state['product_names']=clean.drop_duplicates('sku').set_index('sku')['description'].to_dict() if 'description' in clean else {}
+                for key in ['inventory','replay_result','scenario_result','study']: st.session_state.pop(key,None)
             except Exception as e: st.error(str(e))
         if 'summary' in st.session_state:
-            section('第四步 · 查看核验结果','错误记录已隔离。疑似重复记录仍保留，请根据问题清单核对，修正文件后重新导入。')
+            section('第四步 · 查看核验结果','已自动处理的记录无需修改；疑似重复仍计入销量，请复核。错误行已隔离，修正后重新导入才能计入。')
             names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
             cols=st.columns(4)
             for i,(k,v) in enumerate(st.session_state.summary.items()): cols[i%4].metric(names[k],v)
             if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
-            else: table_view(chinese(st.session_state.issues),hide_index=True)
+            else:
+                issues=st.session_state.issues
+                groups=[('必须修正', ['INVALID_FIELD','CONFLICTING_LINE_ID']),('需要复核',['SUSPECT_DUPLICATE']),('已自动处理',['CANCELLED','RETURN','NOT_COMPLETED','NON_PRODUCT','DUPLICATE_LINE'])]
+                for title,codes in groups:
+                    subset=issues[issues.reason_code.isin(codes)]
+                    with st.expander(f'{title} · {len(subset)} 条',expanded=title=='必须修正' and len(subset)>0):
+                        if len(subset): table_view(chinese(subset),hide_index=True)
+                st.info('可继续配置库存；疑似重复可能影响建议数量，实际采购前请完成复核。')
             download('下载问题行',chinese(st.session_state.issues),'issues.csv')
             st.button('下一步：核对库存 →',on_click=navigate,args=('库存配置',))
 elif page=='使用指南':
@@ -226,7 +248,10 @@ else:
         st.caption('02 / 库存快照必须与决策日期一致：'+str(as_of.date()))
         section('填写商品库存与采购约束','选择商品，修改下方字段并保存。保存后进入补货清单即可重新计算。商品编码不能编辑；库存快照日期请使用上方提示日期。')
         st.warning('初始库存是演示参数。实际使用请逐项核对现货、在途与供应商交期。')
-        with st.expander('填写说明与批量导入步骤',expanded=True):
+        if usage_mode=='演示探索':
+            st.info('演示库存已准备好，可直接查看建议，也可修改现货观察结果变化。')
+            st.button('使用演示库存继续 →',on_click=navigate,args=('补货清单',),type='primary')
+        with st.expander('填写说明与批量导入步骤',expanded=False):
             st.markdown('**现货/在途：**均为非负整数；在途只填写预计按期到达的采购。**交期：**至少1天。**每箱件数：**至少1件。**起订量：**没有限制时填0。\n\n批量修改：下载库存模板 → 保留表头和商品编码 → 修改数量和日期 → 上传 → 点击应用。表格中的到货确认填写“是”或“否”。')
         template=st.session_state.inventory
         download('下载库存模板',chinese(template),'inventory.csv')
@@ -241,6 +266,18 @@ else:
                 st.session_state.inventory=inv
                 st.info('导入参数均已重置为未确认，请逐商品核对来源后保存。')
             except Exception: st.error('库存字段不完整或商品编码重复')
+        with st.expander('批量设置交期与箱规'):
+            with st.form('bulk_stock'):
+                selected_skus=st.multiselect('选择同一供应商或采购条件的商品',st.session_state.inventory.sku.tolist())
+                bulk_lead=st.number_input('统一交期（天）',1,365,3)
+                bulk_pack=st.number_input('统一每箱件数',1,10000,6)
+                st.caption('只应用于所选商品；变更后需重新核实采购参数。')
+                if st.form_submit_button('应用到所选商品'):
+                    mask=st.session_state.inventory.sku.isin(selected_skus)
+                    st.session_state.inventory.loc[mask,'lead_days']=bulk_lead
+                    st.session_state.inventory.loc[mask,'pack_size']=bulk_pack
+                    st.session_state.inventory.loc[mask,'verified']=False
+                    st.success(f'已更新 {int(mask.sum())} 个商品，请重新核实参数。')
         chosen=st.selectbox('选择要修改的商品',st.session_state.inventory.sku.tolist())
         idx=st.session_state.inventory.index[st.session_state.inventory.sku==chosen][0]
         row=st.session_state.inventory.loc[idx].to_dict()
@@ -269,9 +306,15 @@ else:
         out=out.assign(_priority=out.status.map({'人工复核':0,'建议下单':1,'暂不补货':2})).sort_values('_priority').drop(columns='_priority')
         cols=st.columns(3)
         for col,status in zip(cols,['建议下单','暂不补货','人工复核']): col.metric(status,int((out.status==status).sum()))
-        search=st.text_input('查找商品编码');statuses=st.multiselect('状态',list(out.status.unique()),default=list(out.status.unique()))
-        filtered=out[out.sku.str.contains(search,regex=False)&out.status.isin(statuses)]
-        table_view(chinese(filtered[['sku','status','qty']]),hide_index=True,width='stretch')
+        out['商品名称']=out.sku.map(st.session_state.get('product_names',{})).astype(object).fillna('未提供名称')
+        stocks=st.session_state.inventory.set_index('sku')
+        out['现货（件）']=out.sku.map(stocks.on_hand)
+        out['建议箱数']=[round(r.qty/float(stocks.loc[r.sku,'pack_size']),2) if pd.notna(r.qty) and r.sku in stocks.index and float(stocks.loc[r.sku,'pack_size'])>0 else None for r in out.itertuples()]
+        out['预计库存覆盖（天）']=(out.inventory_position+out.qty).div(out['mean'].where(out['mean']>0)).round(1) if 'mean' in out else None
+        st.caption('覆盖天数按现货、按期在途与本次补货合计除以历史日均销量估算；不代表到货前不会缺货。')
+        search=st.text_input('查找商品编码或名称');statuses=st.multiselect('状态',list(out.status.unique()),default=list(out.status.unique()))
+        filtered=out[(out.sku.str.contains(search,regex=False)|out['商品名称'].str.contains(search,regex=False))&out.status.isin(statuses)]
+        table_view(chinese(filtered[['sku','商品名称','status','qty','现货（件）','建议箱数','预计库存覆盖（天）']]),hide_index=True,width='stretch')
         if (out.status=='人工复核').any():
             st.warning('请优先处理人工复核商品，数量为空时不能按零采购理解。')
             st.button('返回库存配置处理异常',on_click=navigate,args=('库存配置',))
@@ -281,8 +324,9 @@ else:
                 if r['status']=='人工复核':
                     for code in r.get('reason_codes',[]): st.warning(reason_text(code))
                 else:
+                    st.write(f"建议 {int(r['qty']):,} 件；近28日日均销量约 {r['mean']:,.1f} 件，保护期 {r['protection_days']} 天。")
                     st.write(f"目标库存 {r['target']} 件 − 库存位置 {r['inventory_position']} 件，再按起订量和包装倍数向上调整，得到建议数量。")
-                evidence=[{'说明字段':LABELS.get(k,k),'本次取值':str(v)} for k,v in r.items() if k!='reason_codes']
+                evidence=[{'说明字段':LABELS.get(k,k),'本次取值':(f'{v:,.2f}' if isinstance(v,float) and pd.notna(v) else str(v))} for k,v in r.items() if k!='reason_codes']
                 table_view(pd.DataFrame(evidence))
         download('导出待人工确认清单',chinese(filtered),'replenishment.csv')
     elif page=='策略回放':
@@ -290,9 +334,14 @@ else:
         section('设置公平的对照实验','使用同一商品、同一测试日期、同一初始库存与交期，对比固定比例缓冲和历史误差缓冲。测试前需保留足够历史作为预热。')
         with st.expander('回放如何计算？',expanded=True):
             st.write('每天依次执行：接收当天到货 → 仅使用昨天及以前的销售生成建议 → 登记未来到货 → 按当天需求扣减库存。未满足需求不结转；人工复核当天不新增采购。')
-        sku=st.selectbox('商品',daily.sku.unique());g=daily[daily.sku==sku]
+        recent=daily[daily.date>=daily.date.max()-pd.Timedelta(days=29)]
+        ranked=recent.groupby('sku').sold_qty.sum().sort_values(ascending=False).index.tolist()
+        sku=st.selectbox('商品',ranked);g=daily[daily.sku==sku]
         dates=date_range('测试日期',value=((g.date.max()-pd.Timedelta(days=29)).date(),g.date.max().date()))
         lead=st.selectbox('采购提前期',[2,4,7]);initial=st.number_input('双方初始库存',0,100000,20);pack=st.number_input('包装倍数',1,10000,1)
+        selected_days=g[g.date.between(pd.Timestamp(dates[0]),pd.Timestamp(dates[1]))]
+        st.caption(f'本期历史销量：{selected_days.sold_qty.sum():,.0f} 件；已确认覆盖：{int((selected_days.coverage_status=="confirmed").sum())} 天。默认按最近30天销量排序，未按策略优劣挑选。')
+        if selected_days.sold_qty.sum()==0: st.warning('本期无需求，无法比较策略效果。请选择有销量的商品或日期；零需求回放仍可运行。')
         run_clicked=st.button('运行双策略回放',type='primary')
         if (run_clicked or 'replay_result' in st.session_state) and len(dates)==2:
             cfg=dict(start=str(dates[0]),end=str(dates[1]),lead_days=lead,initial_stock=initial,pack_size=pack)
@@ -304,7 +353,7 @@ else:
                 if cfg!=saved_cfg or sku!=saved_sku: st.warning('参数已修改。下方仍为上一次结果，请点击运行更新。')
                 st.caption('已保存的本次会话实验：商品 '+saved_sku+' / '+saved_cfg['start']+' 至 '+saved_cfg['end'])
                 st.subheader('策略对比结果')
-                st.info('先看件数满足率，再看平均库存：满足率高但库存也高，说明减少缺货的同时增加了库存占用。比例指标0.95表示95%。')
+                st.info('先看件数满足率，再看平均库存：满足率高但库存也高，说明减少缺货的同时增加了库存占用。比例指标以百分比显示；无需求时满足率不适用。')
                 table_view(chinese(metrics),hide_index=True)
                 chart=chinese(timeline)
                 st.plotly_chart(px.line(chart,x='日期',y='期末现货（件）',color='补货策略',title='期末库存轨迹'),width='stretch',config={"displayModeBar":False})
