@@ -8,7 +8,7 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.lock.txt
 .venv/Scripts/python -m streamlit run app.py
 ```
-当前实测 Python 3.14；方案中的 Python 3.11 尚未独立复验。锁定文件记录本机实际安装版本。
+原记录使用 Python 3.14。本轮补充 Python 3.11.4 独立环境验收，实际结果见 docs/验收进度.md；锁定文件的 NumPy 改为兼容该环境的 2.4.6。
 
 ## 演示
 1. 导入页点击 UCI 真实交易样本，确认完整覆盖日期，点击核验。
@@ -30,3 +30,15 @@ python -m venv .venv
 
 ## 重建 UCI 样本
 从官方页面下载ZIP到 data/raw/online-retail-ii.zip，然后运行 `.venv/Scripts/python scripts/prepare_uci.py`。来源、CC BY 4.0署名、筛选口径、训练/测试区间和哈希见 DATA_SOURCES.md 与 data/demo/manifest.json。
+
+只读核验官方ZIP、工作簿和样本逐行一致性：`.venv/Scripts/python scripts/verify_uci.py`。
+
+运行一商品固定配置公开数据回放验收：`.venv/Scripts/python scripts/validate_public_sample.py`，结果在 outputs/validation/；它是软件实验，不代表真实小店经营效果。
+
+## 后续交付
+
+- [真实商户试用方案](docs/真实商户试用方案.md)：需经营者参与，目前未执行。
+- [OPC实践说明草稿](docs/OPC创新实践说明草稿.md)：学生实际贡献需本人核实填写。
+- [评审录屏脚本](docs/评审录屏脚本.md)：约4分40秒，尚未录制成片。
+- [部署操作说明](docs/部署操作说明.md)：待确认发布后进行云端访问验收。
+- [验收进度](docs/验收进度.md)：区分已实测与待完成事项。

@@ -31,7 +31,8 @@ def test_replay():
 def test_export(): assert b"'=1" in csv_bytes(pd.DataFrame({'sku':['=1']}))
 def test_ui():
  from streamlit.testing.v1 import AppTest
- a=AppTest.from_file('../app.py',default_timeout=60).run();assert not a.exception
+ from pathlib import Path
+ a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60).run();assert not a.exception
  a.sidebar.radio[0].set_value('导入与质检').run()
  a.button[0].click().run();assert not a.exception
  a.checkbox[0].check().run();a.button[1].click().run();assert not a.exception
@@ -48,10 +49,11 @@ def test_ui():
 def test_uci_sample_provenance():
  import json,hashlib
  from pathlib import Path
- meta=json.loads(Path('data/demo/manifest.json').read_text(encoding='utf-8'))
- raw=Path('data/demo/orders.csv').read_bytes()
+ root=Path(__file__).resolve().parents[1]
+ meta=json.loads((root/'data/demo/manifest.json').read_text(encoding='utf-8'))
+ raw=(root/'data/demo/orders.csv').read_bytes()
  assert hashlib.sha256(raw).hexdigest()==meta['sample_sha256']
- d=pd.read_csv('data/demo/orders.csv',dtype=str)
+ d=pd.read_csv(root/'data/demo/orders.csv',dtype=str)
  assert len(d)==meta['rows'] and d.sku.nunique()==20
  assert 'line_id' not in d and 'Customer ID' not in d
  assert d.order_at.min()>=meta['start'] and d.order_at.max()<=meta['end']
