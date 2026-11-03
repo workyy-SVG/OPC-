@@ -8,6 +8,10 @@ def order_quantity(mean, buffer, stock, lead, minimum, pack):
 def recommend(history, stock, config, as_of):
     date=pd.Timestamp(as_of).normalize(); reasons=[]
     result=dict(sku=stock.get('sku',''),as_of=str(date.date()),status='人工复核',qty=None,rule_version=VERSION,source=stock.get('source','用户输入'))
+    from .validation import parameter_status
+    result['parameter_kind']=stock.get('parameter_kind','未核实')
+    result['evidence_type']='历史销量规则建议；未经商户经营效果验证'
+    if config.get('require_actual') and not parameter_status(stock): reasons.append('UNVERIFIED_PARAMETERS')
     for k in ['on_hand','on_order','lead_days','pack_size','min_order']:
         try:
             v=float(stock[k]); assert math.isfinite(v) and v.is_integer() and v >= (1 if k in ['lead_days','pack_size'] else 0)
