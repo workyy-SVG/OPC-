@@ -55,5 +55,5 @@
   "coverage_assumption": "Full published transaction extract treated as complete calendar-day coverage, including zero-sale days; not independently verified store opening records",
   "zip_sha256": "572e36277c2390fbfde10664750731e0a86f55e33470d91919085f0408e67bfb",
   "xlsx_sha256": "bcbe73b35f5b7babf197fb0cb983a11f5d9ff929078d4aa53d171b1f2df2e980",
-  "sample_sha256": "8f8f5219d28ecec3dc6b750401469c864e0853806624cde018a4da9f25eb5304"
+  "sample_sha256": "5217a1878ca04eb675c1a7c42201778ec3644a0faf0752ab5a5ae3151a0cb25a"
 }

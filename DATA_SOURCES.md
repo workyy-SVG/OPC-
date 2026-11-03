@@ -22,4 +22,4 @@ Chen, D. (2012). Online Retail II [Dataset]. UCI Machine Learning Repository.
 
 ### 可复现处理
 运行 `scripts/prepare_uci.py` 从官方ZIP重建相同样本。原始ZIP放在 data/raw，不上传仓库；轻量样本和完整处理清单随源码提供。
-样本 SHA-256：`8f8f5219d28ecec3dc6b750401469c864e0853806624cde018a4da9f25eb5304`。
+样本 SHA-256：`5217a1878ca04eb675c1a7c42201778ec3644a0faf0752ab5a5ae3151a0cb25a`。
