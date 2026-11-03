@@ -32,6 +32,7 @@ def test_export(): assert b"'=1" in csv_bytes(pd.DataFrame({'sku':['=1']}))
 def test_ui():
  from streamlit.testing.v1 import AppTest
  a=AppTest.from_file('../app.py',default_timeout=60).run();assert not a.exception
+ a.sidebar.radio[0].set_value('导入与质检').run()
  a.button[0].click().run();assert not a.exception
  a.checkbox[0].check().run();a.button[1].click().run();assert not a.exception
  for page in ['库存配置','补货清单','策略回放','使用指南','数据与说明']:

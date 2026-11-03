@@ -54,4 +54,22 @@ def apply_theme():
 [data-testid="stFileUploaderDropzone"] button:after{content:'选择文件';font-size:14px}
 [data-testid="stFileUploaderDropzone"] button div{display:none!important}
 #MainMenu{display:none}[data-testid="stToolbar"]{display:none}
+/* 经营工作台：网格底纹、深色导航与多色业务卡片 */
+.stApp{background:radial-gradient(ellipse at 85% 8%,#bce4e4a0,transparent 40%),radial-gradient(ellipse at 5% 65%,#f0d3ac65,transparent 38%),repeating-linear-gradient(0deg,transparent 0 31px,#617e9410 32px),repeating-linear-gradient(90deg,transparent 0 31px,#617e9410 32px),#f1f4f8!important}
+[data-testid="stSidebar"]{background:linear-gradient(165deg,#112e37,#193e48 65%,#254c54)!important;border-right:1px solid #ffffff10}
+[data-testid="stSidebar"] h1,[data-testid="stSidebar"] h2,[data-testid="stSidebar"] h3,[data-testid="stSidebar"] p,[data-testid="stSidebar"] label,[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{color:#e2eeef!important}
+[data-testid="stSidebar"] [data-testid="stAlert"]{background:#ffffff0e;border:1px solid #ffffff20}
+[data-testid="stSidebar"] [role="radiogroup"]{gap:8px}
+[data-testid="stSidebar"] [role="radiogroup"] label{padding:10px 12px;border-radius:9px;background:#ffffff08}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover{background:#ffffff19}
+.workspace-banner{background:linear-gradient(120deg,#122f3b 0%,#245d70 60%,#438b94 100%);border:1px solid #ffffff80;box-shadow:0 18px 45px #193a4d20;padding:26px 32px}
+.workspace-banner:after{content:'';position:absolute;right:30px;top:-55px;width:220px;height:220px;border:28px solid #ffffff0b;border-radius:40px;transform:rotate(32deg);pointer-events:none}
+.workspace-banner:before{content:'';position:absolute;right:100px;bottom:-150px;width:330px;height:230px;border:1px solid #e8c78a60;border-radius:50%;transform:rotate(-25deg);pointer-events:none}
+.banner-tag{display:inline-block;background:#ffffff12;border:1px solid #ffffff22;border-radius:30px;padding:5px 12px;color:#f3d59a}
+[data-testid="stColumn"]:nth-child(2) [data-testid="stMetric"]{background:linear-gradient(130deg,#fff,#ebeffb)!important;border-top-color:#8b9bd3!important}
+[data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"]{background:linear-gradient(130deg,#fff,#fff0dd)!important;border-top-color:#d9ad6a!important}
+[data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"]{background:linear-gradient(130deg,#fff,#f1eafb)!important;border-top-color:#b499d1!important}
+[data-testid="stVerticalBlockBorderWrapper"]{background:#ffffffbb;border-radius:16px;box-shadow:0 8px 25px #30485908}
+.stButton button{border-radius:10px;transition:box-shadow .18s,transform .18s}.stButton button:hover{box-shadow:0 5px 15px #1a485c18;transform:translateY(-1px)}
+@media(max-width:768px){.workspace-banner{padding:20px}.workspace-banner h2{font-size:24px}.banner-flow{font-size:12px}}
 </style>''',unsafe_allow_html=True)

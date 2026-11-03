@@ -23,10 +23,21 @@ h1{font-weight:800;letter-spacing:-.03em}h2,h3{color:#234a42}
 apply_theme()
 st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
-page=st.sidebar.radio('工作台',['导入与质检','库存配置','补货清单','策略回放','使用指南','数据与说明'])
+def navigate(target): st.session_state['navigation']=target
+page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','使用指南','数据与说明'],key='navigation')
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
 st.title(page)
-st.markdown('<div class="workspace-banner"><span class="banner-tag">小店经营 · 决策工作台</span><h2>把补货安排得明明白白</h2><p>整理销售记录，掌握库存变化，让每一笔采购都有依据。</p><div class="banner-flow">① 核验销售　 →　 ② 盘点库存　 →　 ③ 确认补货　 →　 ④ 对比策略</div></div>',unsafe_allow_html=True)
+HEADINGS={
+'经营总览':('今天的经营，从这里开始','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
+'导入与质检':('先把销售记录整理清楚','导入、匹配、核验，确保每一条建议都有可靠输入。','数据准备'),
+'库存配置':('把真实库存和采购条件填准确','逐商品核对现货、在途与交期，为补货决策做好准备。','库存管理'),
+'补货清单':('先处理异常，再确认采购','检查人工复核事项，逐条核对建议依据，导出待确认清单。','采购决策'),
+'策略回放':('在同样的条件下，看清策略取舍','同时观察满足率与库存占用，保留可追溯的实验记录。','经营分析'),
+'使用指南':('第一次使用，也能按步骤完成','从五分钟演示开始，随时查阅字段解释和操作帮助。','帮助中心'),
+'数据与说明':('知道数据从哪里来，结果适用于哪里','了解样本来源、计算规则与当前产品边界。','数据说明')}
+headline,subtitle,tag=HEADINGS[page]
+st.markdown(f'<div class="workspace-banner"><span class="banner-tag">小店补货助手 / {tag}</span><h2>{headline}</h2><p>{subtitle}</p><div class="banner-flow">数据准备　／　库存管理　／　采购决策　／　经营分析</div></div>',unsafe_allow_html=True)
+
 with st.sidebar:
     st.divider()
     st.subheader('当前进度')
@@ -50,7 +61,37 @@ def section(title,description):
     st.subheader(title);st.write(description)
 
 def download(label,df,name): st.download_button(label,csv_bytes(df),name,'text/csv')
-if page=='导入与质检':
+if page=='经营总览':
+    ready='daily' in st.session_state and not st.session_state.daily.empty
+    cols=st.columns(4)
+    cols[0].metric('管理商品',st.session_state.daily.sku.nunique() if ready else '—',help='来自当前已核验数据')
+    cols[1].metric('有效销售记录',st.session_state.get('summary',{}).get('valid','—'))
+    cols[2].metric('待核对记录',len(st.session_state.issues) if 'issues' in st.session_state else '—')
+    cols[3].metric('库存配置商品',len(st.session_state.inventory) if 'inventory' in st.session_state else '—')
+    left,right=st.columns([1.5,1])
+    with left:
+        section('我的工作任务','按顺序完成准备，再查看补货建议。统计仅基于当前会话数据。')
+        tasks=[('01','整理销售数据','导入并核验完整日期内的销售记录。','导入与质检',ready),('02','核对库存参数','填写真实现货、在途及供应商交期。','库存配置','inventory' in st.session_state),('03','审核补货建议','先解决人工复核，再检查下单数量。','补货清单',False),('04','比较历史策略','查看缺货与库存之间的取舍。','策略回放','replay_result' in st.session_state)]
+        for number,title,body,target,done in tasks:
+            with st.container(border=True):
+                st.markdown(f'**{number}　{title}**　'+('· 已有数据' if done else '· 待处理'))
+                st.caption(body)
+                st.button('打开'+target,key='home_'+target,on_click=navigate,args=(target,),disabled=target not in ['导入与质检'] and not ready)
+    with right:
+        with st.container(border=True):
+            st.subheader('建议下一步')
+            target='导入与质检' if not ready else '库存配置' if 'inventory' not in st.session_state else '补货清单'
+            st.write('当前建议：'+target)
+            st.button('继续处理 →',type='primary',on_click=navigate,args=(target,))
+            st.caption('库存中预填的数字仅为演示参数。已有配置不代表完成真实盘点。')
+        with st.container(border=True):
+            st.subheader('数据范围')
+            if ready:
+                st.write(str(st.session_state.daily.date.min().date())+' 至 '+str(st.session_state.daily.date.max().date()))
+                st.caption('当前数据指纹：'+st.session_state.data_hash[:12])
+            else: st.info('尚未导入数据；可先使用内置合成样本体验。')
+        st.button('查看五分钟使用指南',on_click=navigate,args=('使用指南',))
+elif page=='导入与质检':
     st.info('第一次体验：点击下方「一键加载合成演示样本」，保持日期与字段默认值，勾选覆盖确认，再点击「核验并使用此数据」。')
     section('第一步 · 选择销售数据','上传从收银系统或记账表导出的 CSV 文件，或使用内置的 20 个商品演示数据。演示样本不代表真实经营情况。')
     with st.expander('我的表格需要包含哪些字段？'):
@@ -59,6 +100,9 @@ if page=='导入与质检':
     demo=st.button('一键加载合成演示样本',type='primary')
     if demo or upload:
         raw=Path('data/demo/orders.csv').read_bytes() if demo else upload.getvalue()
+        if st.session_state.get('raw')!=raw:
+            for dependent in ['daily','inventory','issues','summary','replay_result','data_hash']:
+                st.session_state.pop(dependent,None)
         st.session_state['raw']=raw
     if 'raw' in st.session_state:
         try: df=pd.read_csv(io.BytesIO(st.session_state.raw),dtype=str,keep_default_na=False)
@@ -88,6 +132,7 @@ if page=='导入与质检':
             if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
             else: table_view(chinese(st.session_state.issues),hide_index=True)
             download('下载问题行',chinese(st.session_state.issues),'issues.csv')
+            st.button('下一步：核对库存 →',on_click=navigate,args=('库存配置',))
 elif page=='使用指南':
     st.success('建议先用内置样本体验一遍，再替换为自己的订单和库存。整个体验约需 5 分钟。')
     tabs=st.tabs(['快速上手','字段字典','如何理解结果','常见问题'])
@@ -149,15 +194,21 @@ else:
                 for k,v in changes.items(): st.session_state.inventory.loc[idx,k]=v
                 st.success('已保存。进入补货清单即可查看更新后的建议。')
         table_view(chinese(st.session_state.inventory))
+        st.button('下一步：查看补货建议 →',on_click=navigate,args=('补货清单',),type='primary')
     elif page=='补货清单':
         section('本次补货建议','建议下单：存在库存缺口；暂不补货：当前库存位置已达到目标；人工复核：信息不足，暂不给出数量。')
         st.caption('每次进入本页均按当前库存重新计算。请先核对参数来源，再导出清单。')
         decisions=[recommend(g,st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, {},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
-        out=pd.DataFrame(decisions); cols=st.columns(3)
+        out=pd.DataFrame(decisions)
+        out=out.assign(_priority=out.status.map({'人工复核':0,'建议下单':1,'暂不补货':2})).sort_values('_priority').drop(columns='_priority')
+        cols=st.columns(3)
         for col,status in zip(cols,['建议下单','暂不补货','人工复核']): col.metric(status,int((out.status==status).sum()))
         search=st.text_input('查找商品编码');statuses=st.multiselect('状态',list(out.status.unique()),default=list(out.status.unique()))
         filtered=out[out.sku.str.contains(search,regex=False)&out.status.isin(statuses)]
         table_view(chinese(filtered[['sku','status','qty']]),hide_index=True,use_container_width=True)
+        if (out.status=='人工复核').any():
+            st.warning('请优先处理人工复核商品，数量为空时不能按零采购理解。')
+            st.button('返回库存配置处理异常',on_click=navigate,args=('库存配置',))
         st.subheader('逐商品计算依据')
         for r in filtered.to_dict('records'):
             with st.expander('商品 '+str(r['sku'])+' · '+('需要人工复核' if r['status']=='人工复核' else '建议 '+str(int(r['qty']))+' 件')):
@@ -175,10 +226,16 @@ else:
         sku=st.selectbox('商品',daily.sku.unique());g=daily[daily.sku==sku]
         dates=date_range('测试日期',value=((g.date.max()-pd.Timedelta(days=29)).date(),g.date.max().date()))
         lead=st.selectbox('采购提前期',[2,4,7]);initial=st.number_input('双方初始库存',0,100000,20);pack=st.number_input('包装倍数',1,10000,1)
-        if st.button('运行双策略回放',type='primary') and len(dates)==2:
+        run_clicked=st.button('运行双策略回放',type='primary')
+        if (run_clicked or 'replay_result' in st.session_state) and len(dates)==2:
             cfg=dict(start=str(dates[0]),end=str(dates[1]),lead_days=lead,initial_stock=initial,pack_size=pack)
             try:
-                timeline,metrics=run_replay(g,cfg)
+                if run_clicked:
+                    timeline,metrics=run_replay(g,cfg)
+                    st.session_state.replay_result=(timeline,metrics,cfg,sku)
+                timeline,metrics,saved_cfg,saved_sku=st.session_state.replay_result
+                if cfg!=saved_cfg or sku!=saved_sku: st.warning('参数已修改。下方仍为上一次结果，请点击运行更新。')
+                st.caption('已保存的本次会话实验：商品 '+saved_sku+' / '+saved_cfg['start']+' 至 '+saved_cfg['end'])
                 st.subheader('策略对比结果')
                 st.info('先看件数满足率，再看平均库存：满足率高但库存也高，说明减少缺货的同时增加了库存占用。比例指标0.95表示95%。')
                 table_view(chinese(metrics),hide_index=True)
@@ -189,6 +246,6 @@ else:
                 table_view(chinese(timeline),hide_index=True)
                 buf=io.BytesIO()
                 with zipfile.ZipFile(buf,'w') as z:
-                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=cfg,sku=sku,data_hash=st.session_state.data_hash,version='1.0.0'),ensure_ascii=False,indent=2))
+                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=saved_cfg,sku=saved_sku,data_hash=st.session_state.data_hash,version='1.0.0'),ensure_ascii=False,indent=2))
                 st.download_button('导出可复现实验 ZIP',buf.getvalue(),'experiment.zip')
             except ValueError as e: st.error(str(e))
