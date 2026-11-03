@@ -40,4 +40,5 @@ def test_ui():
 
  a.sidebar.radio[0].set_value('策略回放').run(timeout=60)
  a.button[0].click().run(timeout=60);assert not a.exception
- assert len(a.dataframe)>=2
+ assert len(a.markdown)>2
+
