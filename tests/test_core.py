@@ -34,6 +34,10 @@ def test_ui():
  a=AppTest.from_file('../app.py',default_timeout=60).run();assert not a.exception
  a.button[0].click().run();assert not a.exception
  a.checkbox[0].check().run();a.button[1].click().run();assert not a.exception
- for page in ['库存配置','补货清单','策略回放','数据与说明']:
+ for page in ['库存配置','补货清单','策略回放','使用指南','数据与说明']:
   a.sidebar.radio[0].set_value(page).run(timeout=60);assert not a.exception
 
+
+ a.sidebar.radio[0].set_value('策略回放').run(timeout=60)
+ a.button[0].click().run(timeout=60);assert not a.exception
+ assert len(a.dataframe)>=2
