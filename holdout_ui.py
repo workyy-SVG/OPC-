@@ -56,6 +56,9 @@ def render(daily, product_label):
 
 def _render_result(result, product_label):
     summary = result['summary'].set_index('policy')
+    # A hot deployment may retain a zero-demand result produced by older code.
+    if not result['active_count'] and 'fill_rate_calibration' not in summary:
+        summary = summary.rename(columns={'fill_rate': 'fill_rate_calibration'})
     details = result['details']
     target = result['target']
     size, active = len(result['cohort']), result['active_count']

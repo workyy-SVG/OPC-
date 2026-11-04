@@ -99,13 +99,21 @@ def run_holdout_study(daily, test_end, target=.9):
     details['meets_target'] = details.fill_rate.notna() & details.fill_rate.ge(target) & details.review_rate.eq(0)
     active = details[details.demand > 0]
     active_count = active.sku.nunique()
-    summary = pd.DataFrame(chosen)
-    if active_count:
-        test_summary = pd.DataFrame([{'policy': policy, **_totals(rows),
-                                     'reviewed': bool(rows.review_rate.gt(0).any())}
-                                    for policy, rows in active.groupby('policy')])
-        summary = summary.merge(test_summary, on='policy', suffixes=('_calibration', '_test'))
-        summary['test_met'] = summary.fill_rate_test.ge(target) & ~summary.reviewed
+    # Keep one schema even when every selected product has zero test demand.
+    metrics = ('fill_rate', 'mean_stock', 'mean_on_order', 'demand', 'shortage')
+    summary = pd.DataFrame(chosen).rename(columns={key: key + '_calibration' for key in metrics})
+    test_rows = []
+    for row in chosen:
+        rows = active[active.policy == row['policy']]
+        totals = _totals(rows)
+        if rows.empty:
+            # No active cohort: inventory aggregates are not applicable, not zero.
+            totals.update(mean_stock=None, mean_on_order=None)
+        test_rows.append({'policy': row['policy'],
+                          **{key + '_test': value for key, value in totals.items()},
+                          'reviewed': bool(rows.review_rate.gt(0).any())})
+    summary = summary.merge(pd.DataFrame(test_rows), on='policy')
+    summary['test_met'] = summary.fill_rate_test.notna() & summary.fill_rate_test.ge(target) & ~summary.reviewed
     return {
         'summary': summary, 'details': details, 'candidates': pd.DataFrame(candidates),
         'cohort': cohort, 'active_count': active_count,
