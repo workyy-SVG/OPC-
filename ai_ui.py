@@ -23,7 +23,7 @@ def provider_picker(key):
 
 def headers_ui(columns):
     with st.expander('智能匹配表头'):
-        st.caption('仅发送列名，不发送订单行；应用后请核对四个字段。')
+        st.caption('先识别常见列名。勾选 AI 后，只向所选服务发送列名来匹配陌生字段。填入后请核对四项映射。')
         provider = provider_picker('header_provider')
         use_ai = st.checkbox('陌生列名使用AI识别（会发送列名）')
         if st.button('匹配并填写字段'):
@@ -41,6 +41,7 @@ def headers_ui(columns):
 
 def purchasing_ai(inventory, as_of, persist):
     with st.expander('AI录采购：文字或单据照片'):
+        st.caption('把描述或单据转换为采购草稿。请核对总件数与预计到货日期，确认后才会登记到采购台账。')
         provider = provider_picker('purchase_ai_provider')
         multiline = st.checkbox('使用多行输入（加载异常时请取消勾选）', key='purchase_multiline')
         widget = st.text_area if multiline else st.text_input
@@ -87,6 +88,7 @@ def purchasing_ai(inventory, as_of, persist):
 
 def explanation_ui(decisions):
     with st.expander('AI补货解释与问答'):
+        st.caption('用自然语言读懂某个商品的计算证据，也可询问缺项和核对方法。程序计算的建议数量以清单为准。')
         provider = provider_picker('explanation_provider')
         sku = st.selectbox('要解释的商品', decisions.sku.tolist())
         question = st.text_input('补货问题', value='为什么给出这个建议？我还需要核对什么？')
