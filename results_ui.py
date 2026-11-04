@@ -9,6 +9,9 @@ from core.policy import order_quantity
 from ui import show_chart
 
 
+ONBOARDING_REVISION = 1
+
+
 POLICIES = {'baseline': '固定比例缓冲', 'adaptive': '历史误差缓冲'}
 COLORS = {'固定比例缓冲': '#526a84', '历史误差缓冲': '#167969'}
 TEAL, SLATE, AMBER = '#167969', '#526a84', '#ad6634'
@@ -148,7 +151,7 @@ def scenario_charts(scenarios, comparisons):
                 f'历史误差缓冲相对固定比例缓冲的满足率差为 {highlights.fill_delta * 100:+.1f} 个百分点，'
                 f'平均期末库存差为 {highlights.inventory_delta:+,.1f} 件。')
     for metric, title, caption in (
-        ('fill_rate', '每组条件的件数满足率', '同组两根柱使用相同初始库存、交期和箱规。悬停可看具体条件；无需求的组不显示满足率。'),
+        ('fill_rate', '每组条件的件数满足率', '同组两根柱使用相同初始库存、交期和每箱件数。悬停可看具体条件。无需求时满足率不适用。'),
         ('mean_stock', '每组条件的平均期末库存', '同组内与上图一起读。满足率上升同时库存增加，表示服务表现与备货占用之间有取舍。'),
     ):
         values = data.dropna(subset=[metric])
@@ -206,7 +209,7 @@ def study_charts(result):
 
 def guide_example():
     st.subheader('动手试算 · 补货件数如何得出')
-    st.write('示例固定日均销量 5 件、误差缓冲 6 件、最小起订量 15 件。调整输入观察目标、缺口和箱规取整。')
+    st.write('示例固定日均销量 5 件、误差缓冲 6 件、最小起订量 15 件。调整输入观察目标、缺口和按整箱取整后的建议量。')
     left, middle, right = st.columns(3)
     lead = left.slider('示例采购交期（天）', 1, 7, 3)
     stock = middle.slider('示例现货与按期在途（件）', 0, 50, 12)
@@ -219,4 +222,3 @@ def guide_example():
                f'保护期为 {lead + 1} 天，目标 {target} 件，缺口 {gap} 件。'
                + (f'满足起订量后按 {pack} 件/箱向上取整，建议 {qty} 件。' if gap else '现有库存已达到目标，建议 0 件。'),
                height=300)
-
