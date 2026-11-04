@@ -1,4 +1,6 @@
 """Charts and contextual readings for replenishment results."""
+from html import escape
+
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -8,23 +10,109 @@ from ui import show_chart
 
 
 POLICIES = {'baseline': '固定比例缓冲', 'adaptive': '历史误差缓冲'}
-COLORS = {'固定比例缓冲': '#4d7193', '历史误差缓冲': '#217664'}
+COLORS = {'固定比例缓冲': '#526a84', '历史误差缓冲': '#167969'}
+TEAL, SLATE, AMBER = '#167969', '#526a84', '#ad6634'
+
+
+def _card(title, subtitle, content, foot=''):
+    st.markdown(
+        f'<div class="visual-card"><h3>{escape(title)}</h3>'
+        f'<p class="visual-note">{escape(subtitle)}</p>{content}'
+        + (f'<p class="visual-foot">{escape(foot)}</p>' if foot else '')
+        + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _segment(value, scale, color):
+    return f'<span style="width:{value / scale * 100:.4f}%;background:{color}"></span>' if scale else ''
+
+
+def _rows(items, scale, unit):
+    return ''.join(
+        f'<div class="visual-row"><div class="visual-row-label"><span><i class="visual-dot" style="background:{color}"></i>'
+        f'{escape(label)}</span><strong>{escape(unit(value))}</strong></div>'
+        f'<div class="visual-track" aria-hidden="true">{_segment(value, scale, color)}</div></div>'
+        for label, value, color in items
+    )
+
+
+def distribution(title, subtitle, items, unit, foot=''):
+    total = sum(value for _, value, _ in items)
+    bar = ''.join(_segment(value, total, color) for _, value, color in items)
+    labels = ''.join(
+        f'<div class="visual-tile"><small><i class="visual-dot" style="background:{color}"></i>{escape(label)}</small>'
+        f'<strong>{value:,} {escape(unit)}</strong></div>'
+        for label, value, color in items
+    )
+    _card(title, subtitle, f'<div class="visual-track" aria-hidden="true">{bar}</div>'
+          f'<div class="visual-summary">{labels}</div>', foot)
 
 
 def quality_charts(summary, names):
-    excluded = {names[key]: value for key, value in summary.items() if key not in ('valid', 'suspicious')}
-    kept, isolated = st.columns(2)
-    with kept:
-        data = pd.DataFrame({'处理结果': ['纳入销量', '未纳入销量'], '记录数': [summary['valid'], sum(excluded.values())]})
-        show_chart(px.bar(data, x='处理结果', y='记录数', text='记录数', title='销售记录去向',
-                          color_discrete_sequence=['#217664']),
-                   f"疑似重复的 {summary['suspicious']:,} 条已包含在纳入销量中，需人工核对。", height=290)
-    with isolated:
-        data = pd.DataFrame(list(excluded.items()), columns=['处理原因', '记录数'])
-        fig = px.bar(data, x='记录数', y='处理原因', text='记录数', orientation='h',
-                     title='未纳入销量的记录明细', color_discrete_sequence=['#b15a25'])
-        fig.update_yaxes(autorange='reversed')
-        show_chart(fig, '查看哪些记录按规则排除，以及哪些需要修正。下方问题明细可定位原文件。', height=290)
+    excluded = sum(value for key, value in summary.items() if key not in ('valid', 'suspicious'))
+    valid, suspicious = summary['valid'], summary['suspicious']
+    total = valid + excluded
+    left, right = st.columns(2)
+    with left:
+        distribution('销售记录去向',
+                     f'共 {total:,} 条记录 · {valid / total:.1%} 计入销量' if total else '本次没有销售记录',
+                     [('计入销量', valid, TEAL), ('未计入销量', excluded, SLATE)], '条',
+                     f'计入销量的记录中有 {suspicious:,} 条疑似重复，可在下方核对。' if suspicious else '计入销量的记录将用于补货计算。')
+    with right:
+        items = [
+            (names[key], value, AMBER if key in ('suspicious', 'error') else SLATE)
+            for key, value in summary.items() if key != 'valid' and value
+        ]
+        items.sort(key=lambda item: item[1], reverse=True)
+        if items:
+            _card('需要关注的记录', '橙色标出疑似重复和错误记录',
+                  _rows(items, items[0][1], lambda value: f'{value:,} 条'),
+                  '下方明细按处理方式分组，可查原记录和修正建议。')
+        else:
+            _card('需要关注的记录', '本次未发现需要核对或排除的记录。', '')
+
+
+def inventory_chart(inventory):
+    stock = inventory[['sku', 'on_hand', 'on_order']]
+    if stock.empty:
+        _card('库存分布', '当前没有库存记录。', '')
+        return
+    if stock[['on_hand', 'on_order']].drop_duplicates().shape[0] == 1:
+        row = stock.iloc[0]
+        distribution('库存分布', f'{len(stock):,} 个商品使用相同数量',
+                     [('每个商品的现货', int(row.on_hand), TEAL), ('每个商品的在途', int(row.on_order), SLATE)], '件',
+                     '修改任一商品的现货或在途后，这里会展示商品间的差异。')
+        return
+    top = stock.assign(total=stock.on_hand + stock.on_order).nlargest(10, 'total').copy()
+    top['sku'] = top.sku.astype(str)
+    top = top.rename(columns={'on_hand': '现货', 'on_order': '在途'})
+    long = top.melt(id_vars='sku', value_vars=['现货', '在途'], var_name='库存类型', value_name='件数')
+    fig = px.bar(long[long['件数'] > 0], x='件数', y='sku', color='库存类型', orientation='h',
+                 color_discrete_map={'现货': TEAL, '在途': SLATE}, category_orders={'sku': top.sku.tolist()},
+                 title='现货与在途 · 库存总量前 10', labels={'sku': '商品编码'})
+    fig.update_layout(bargap=.42)
+    fig.update_yaxes(type='category', autorange='reversed', title=None, showgrid=False)
+    show_chart(fig, '同一行的两段分别是现货和在途。下方明细保留全部商品。', height=340)
+
+
+def replay_comparison(metrics):
+    left, right = st.columns(2)
+    indexed = metrics.set_index('policy')
+    for column, metric, title, subtitle, formatter in (
+        (left, 'fill_rate', '件数满足率', '已满足件数占模拟需求件数的比例', lambda value: f'{value:.1%}'),
+        (right, 'mean_stock', '平均期末库存', '每天期末现货的平均件数', lambda value: f'{value:,.1f} 件'),
+    ):
+        with column:
+            values = indexed[metric].dropna()
+            if values.empty:
+                _card(title, subtitle, '', '测试区间没有需求，满足率不适用。')
+                continue
+            items = [(name, values[key], COLORS[name]) for key, name in POLICIES.items() if key in values]
+            scale = 1 if metric == 'fill_rate' else values.max()
+            delta = values.get('adaptive', 0) - values.get('baseline', 0)
+            difference = f'{delta * 100:+.1f} 个百分点' if metric == 'fill_rate' else f'{delta:+,.1f} 件'
+            _card(title, subtitle, _rows(items, scale, formatter), f'历史误差缓冲相对固定比例缓冲 {difference}')
 
 
 def replay_reading(metrics):
@@ -131,3 +219,4 @@ def guide_example():
                f'保护期为 {lead + 1} 天，目标 {target} 件，缺口 {gap} 件。'
                + (f'满足起订量后按 {pack} 件/箱向上取整，建议 {qty} 件。' if gap else '现有库存已达到目标，建议 0 件。'),
                height=300)
+
