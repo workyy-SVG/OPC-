@@ -40,6 +40,9 @@ def render(daily, inventory, as_of, require_actual=False):
             except (ValueError, TypeError, KeyError, OSError) as error:
                 st.error('恢复失败：' + str(error))
 
+    from ai_ui import purchasing_ai
+    purchasing_ai(inventory, as_of, persist)
+
     sku = st.selectbox('采购商品', inventory.sku.tolist())
     stock = inventory.set_index('sku').loc[sku].to_dict() | {'sku': sku}
     history = daily[daily.sku == sku]

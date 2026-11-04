@@ -133,6 +133,8 @@ elif page=='导入与质检':
         except Exception as e: st.error(str(e));st.stop()
         section('第二步 · 检查字段与日期','以下为前 10 条原始记录。请将表格中的四个必填列逐一对应；同一列不能重复选择。')
         table_view(chinese(df.head(10)),hide_index=True)
+        from ai_ui import headers_ui
+        headers_ui(list(df.columns))
         mapping={}
         for key in ['order_id','sku','order_at','qty']:
             selected=st.selectbox('对应字段：'+({'qty':'销售数量（件）'}|LABELS).get(key,key),list(df.columns),index=list(df.columns).index(key) if key in df else 0,key='map_'+key,format_func=lambda c: LABELS.get(c,c));mapping[selected]=key
@@ -320,6 +322,8 @@ else:
         if (out.status=='人工复核').any():
             st.warning('请优先处理人工复核商品，数量为空时不能按零采购理解。')
             st.button('返回库存配置处理异常',on_click=navigate,args=('库存配置',))
+        from ai_ui import explanation_ui
+        explanation_ui(out)
         st.subheader('逐商品计算依据')
         for r in filtered.to_dict('records'):
             with st.expander('商品 '+str(r['sku'])+' · '+('需要人工复核' if r['status']=='人工复核' else '建议 '+str(int(r['qty']))+' 件')):
