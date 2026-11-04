@@ -3,6 +3,8 @@ import numpy as np
 import pandas as pd
 from .replay import run_replay
 
+SAME_COHORT_AXES = True
+
 def frontier(points):
     p=points.sort_values(['mean_stock','fill_rate'],ascending=[True,False]).dropna(subset=['fill_rate'])
     keep=[];best=-1
@@ -29,7 +31,9 @@ def run_study(daily,config,ratios=(.1,.2,.3,.4,.5,.6),scales=(.6,1,1.4,1.8),hold
                 r['cost']=r['stock_days']*holding+r['shortage']*shortage_cost+r['orders']*order_cost
                 records.append(r)
     per=pd.DataFrame(records)
-    summary=per.groupby(['policy','parameter'],as_index=False).agg(mean_stock=('mean_stock','mean'),fill_rate=('fill_rate','mean'),cost=('cost','sum'),review_rate=('review_rate','mean'))
+    # Undefined fill rates must also be excluded from the stock axis.
+    comparable = per.assign(comparable_stock=per.mean_stock.where(per.fill_rate.notna()))
+    summary=comparable.groupby(['policy','parameter'],as_index=False).agg(mean_stock=('comparable_stock','mean'),fill_rate=('fill_rate','mean'),cost=('cost','sum'),review_rate=('review_rate','mean'))
     summary['dominated']=[bool(((summary.mean_stock<=r.mean_stock)&(summary.fill_rate>=r.fill_rate)&((summary.mean_stock<r.mean_stock)|(summary.fill_rate>r.fill_rate))).any()) for _,r in summary.iterrows()]
     base=frontier(summary[summary.policy=='baseline']); comparisons=[]
     for _,r in summary[summary.policy=='adaptive'].iterrows():
