@@ -2,7 +2,10 @@ from pathlib import Path
 import hashlib,json,io,zipfile
 from ui import table_view, date_range, apply_theme, show_chart
 from page_help import PAGE_HELP, render_page_help
-from results_ui import POLICIES, COLORS, guide_example, quality_charts, replay_reading, scenario_charts, study_charts
+from results_ui import (
+    AMBER, COLORS, SLATE, TEAL, distribution, guide_example, inventory_chart,
+    quality_charts, replay_comparison, replay_reading, scenario_charts, study_charts,
+)
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -196,18 +199,11 @@ elif page=='导入与质检':
         if 'summary' in st.session_state:
             section('第四步 · 查看核验结果','已自动处理的记录无需修改；疑似重复仍计入销量，请复核。错误行已隔离，修正后重新导入才能计入。')
             names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
-            cols=st.columns(4)
-            for i,(k,v) in enumerate(st.session_state.summary.items()): cols[i%4].metric(names[k],v)
             quality_charts(st.session_state.summary, names)
             if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
             else:
                 issues=st.session_state.issues
                 groups=[('必须修正', ['INVALID_FIELD','CONFLICTING_LINE_ID']),('需要复核',['SUSPECT_DUPLICATE']),('已自动处理',['CANCELLED','RETURN','NOT_COMPLETED','NON_PRODUCT','DUPLICATE_LINE'])]
-                issue_counts = issues.reason_code.value_counts().rename_axis('问题类型').reset_index(name='记录数')
-                issue_counts['问题类型'] = issue_counts['问题类型'].map(reason_text)
-                issue_chart = px.bar(issue_counts, x='记录数', y='问题类型', orientation='h', title='质检问题分布')
-                issue_chart.update_yaxes(autorange='reversed', title=None)
-                show_chart(issue_chart, '每条柱显示该类型的报告次数。一个订单行可能有多项问题。')
                 for title,codes in groups:
                     subset=issues[issues.reason_code.isin(codes)]
                     with st.expander(f'{title} · {len(subset)} 条',expanded=title=='必须修正' and len(subset)>0):
@@ -389,14 +385,7 @@ else:
                 for k,v in changes.items(): st.session_state.inventory.loc[idx,k]=v
                 st.success('已保存。进入补货清单即可查看更新后的建议。')
         inventory = st.session_state.inventory
-        stock_chart = inventory[['sku','on_hand','on_order']].copy()
-        stock_chart['合计'] = stock_chart.on_hand + stock_chart.on_order
-        stock_chart = chinese(stock_chart.nlargest(12,'合计').drop(columns='合计'))
-        stock_chart = stock_chart.melt(id_vars='商品编码', var_name='库存类型', value_name='件数')
-        figure = px.bar(stock_chart, x='件数', y='商品编码', color='库存类型', orientation='h',
-                        title='现货与在途 · 按合计件数最多的12个商品')
-        figure.update_yaxes(type='category', autorange='reversed')
-        show_chart(figure, '现货可直接销售，在途仍待入库。下方明细包含全部商品。', height=400)
+        inventory_chart(inventory)
         table_view(chinese(inventory))
         st.button('下一步：查看补货建议 →',on_click=navigate,args=('补货清单',),type='primary')
     elif page=='补货清单':
@@ -419,19 +408,18 @@ else:
         if filtered.empty:
             st.info('没有符合当前筛选条件的商品，可清空搜索或调整状态。')
         else:
-            counts = (filtered.status.value_counts()
-                      .reindex(['建议下单','暂不补货','人工复核'], fill_value=0)
-                      .rename_axis('处理状态').reset_index(name='商品数'))
-            show_chart(px.bar(counts, x='处理状态', y='商品数', color='处理状态',
-                              color_discrete_map={'建议下单':'#217664','暂不补货':'#4d7193','人工复核':'#b15a25'},
-                              title='筛选结果的补货状态'),
-                       '人工复核商品需要补齐资料后才能给出数量。上方指标统计全部商品。', height=290)
+            statuses_in_order = [('建议下单', TEAL), ('暂不补货', SLATE), ('人工复核', AMBER)]
+            counts = filtered.status.value_counts()
+            distribution('筛选结果的补货状态', f'当前匹配 {len(filtered):,} 个商品',
+                         [(status, int(counts.get(status, 0)), color) for status, color in statuses_in_order], '个',
+                         '人工复核的商品需补齐资料后才有建议数量。上方指标统计全部商品。')
             orders = filtered[filtered.status == '建议下单'].sort_values('qty', ascending=False, kind='stable').head(12)
             if not orders.empty:
                 figure = px.bar(orders, x='qty', y='sku', hover_data=['商品名称'], orientation='h',
-                                labels={'sku':'商品编码','qty':'建议补货（件）'},
-                                title='建议补货件数最多的12个匹配商品')
-                figure.update_yaxes(type='category', autorange='reversed')
+                                labels={'sku':'商品编码','qty':'建议补货（件）'}, color_discrete_sequence=[TEAL],
+                                title='建议补货件数 · 匹配商品前 12')
+                figure.update_layout(bargap=.45)
+                figure.update_yaxes(type='category', autorange='reversed', title=None, showgrid=False)
                 show_chart(figure, '悬停可看商品名称和件数。下方明细保留筛选范围内的全部商品。', height=390)
         table_view(chinese(filtered[['sku','商品名称','status','qty','现货（件）','建议箱数','预计库存覆盖（天）']]),hide_index=True,width='stretch')
         if (out.status=='人工复核').any():
@@ -476,21 +464,7 @@ else:
                 st.subheader('策略对比结果')
                 st.info('先看件数满足率，再看平均库存：满足率高但库存也高，说明减少缺货的同时增加了库存占用。比例指标以百分比显示；无需求时满足率不适用。')
                 replay_reading(metrics)
-                summary_chart = metrics[['policy','fill_rate','mean_stock']].rename(columns=LABELS)
-                summary_chart['补货策略'] = summary_chart['补货策略'].map(POLICIES)
-                left, right = st.columns(2)
-                with left:
-                    fill_chart = summary_chart.dropna(subset=['件数满足率'])
-                    if fill_chart.empty:
-                        st.info('测试区间销量为零，件数满足率无可计算值。')
-                    else:
-                        figure = px.bar(fill_chart, x='补货策略', y='件数满足率', color='补货策略', title='件数满足率')
-                        figure.update_yaxes(tickformat='.0%', range=[0,1])
-                        show_chart(figure, '已满足件数占模拟需求件数的比例。', height=280)
-                with right:
-                    show_chart(px.bar(summary_chart, x='补货策略', y='平均期末库存（件）', color='补货策略',
-                                      title='平均期末库存'),
-                               '库存占用与满足率需一起比较。', height=280)
+                replay_comparison(metrics)
                 table_view(chinese(metrics),hide_index=True)
                 chart=chinese(timeline)
                 show_chart(px.line(chart,x='日期',y='期末现货（件）',color='补货策略',color_discrete_map=COLORS,title='期末库存轨迹'),
@@ -545,3 +519,4 @@ else:
                 z.writestr('comparisons.csv',csv_bytes(comparisons))
                 z.writestr('manifest.json',json.dumps(dict(**scfg,evidence_type='模拟敏感性实验，不能替代真实商户验证',lost_sales='原始订单未提供真实缺货失销量'),ensure_ascii=False,indent=2))
             st.download_button('导出全部条件与实验说明',package.getvalue(),'sensitivity-experiment.zip')
+
