@@ -61,6 +61,13 @@ def complete(system, payload, provider='qwen', image=None):
                 temperature=0, max_tokens=2400, response_format={'type':'json_object'})
     request = urllib.request.Request(endpoint, data=json.dumps(body).encode(), headers={
         'Authorization':'Bearer ' + key, 'Content-Type':'application/json'})
+    from .ai_quota import reserve
+    try:
+        reserve()
+    except (ValueError, OSError) as error:
+        raise AIError(str(error)) from None
+    except Exception:
+        raise AIError('无法读取调用额度，暂时停止AI请求；请检查存储权限') from None
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
             raw = response.read(1024 * 1024 + 1)

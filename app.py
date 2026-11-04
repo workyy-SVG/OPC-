@@ -25,6 +25,20 @@ h1{font-weight:800;letter-spacing:-.03em}h2,h3{color:#234a42}
 apply_theme()
 st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
+@st.fragment(run_every='3s')
+def ai_budget_sidebar():
+    from core.ai_quota import usage
+    st.subheader('AI每日共享额度')
+    try:
+        used, remaining = usage()
+        st.metric('今日剩余调用', f'{remaining} / 100')
+        st.caption(f'千问 + DeepSeek已用 {used} 次 · 全站共享')
+        st.progress(min(used / 100, 1.0))
+        st.caption('北京时间零点重置；请求失败也计数。约每3秒更新。')
+    except Exception:
+        st.warning('额度存储不可用，AI调用暂不可用。')
+with st.sidebar:
+    ai_budget_sidebar()
 def navigate(target): st.session_state['navigation']=target
 page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
