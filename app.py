@@ -23,6 +23,20 @@ h1{font-weight:800;letter-spacing:-.03em}h2,h3{color:#234a42}
 .stButton button[kind="primary"]{background:#217664;border-color:#217664;border-radius:8px}
 </style>""",unsafe_allow_html=True)
 apply_theme()
+st.markdown("""<style>
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]:has(> .st-key-ai_quota_panel){min-height:calc(100dvh - 5rem)}
+.st-key-ai_quota_panel{margin-top:auto;padding-top:24px}
+.st-key-ai_quota_panel h3{color:#edf8f8!important}
+.st-key-ai_quota_panel [data-testid="stMetric"]{background:#1d454d!important;border:1px solid #6b8580!important;border-left:4px solid #ffd75e!important;border-radius:14px;padding:18px 20px!important}
+.st-key-ai_quota_panel [data-testid="stMetricLabel"],
+.st-key-ai_quota_panel [data-testid="stMetricLabel"] *{color:#ffe599!important}
+.st-key-ai_quota_panel [data-testid="stMetricValue"],
+.st-key-ai_quota_panel [data-testid="stMetricValue"] *{color:#ffda63!important;font-weight:750}
+.st-key-ai_quota_panel [data-testid="stCaptionContainer"],
+.st-key-ai_quota_panel [data-testid="stCaptionContainer"] *{color:#ffe599!important}
+.st-key-ai_quota_panel [role="progressbar"]{background:#557078!important}
+.st-key-ai_quota_panel [role="progressbar"]>div{background:#ffda63!important}
+</style>""",unsafe_allow_html=True)
 st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
 @st.fragment(run_every='3s')
@@ -37,8 +51,6 @@ def ai_budget_sidebar():
         st.caption('北京时间零点重置；请求失败也计数。约每3秒更新。')
     except Exception:
         st.warning('额度存储不可用，AI调用暂不可用。')
-with st.sidebar:
-    ai_budget_sidebar()
 def navigate(target): st.session_state['navigation']=target
 page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
@@ -64,6 +76,8 @@ with st.sidebar:
     st.write('✅ 已完成数据核验' if 'daily' in st.session_state else '① 等待导入销售数据')
     st.write('✅ 已建立库存配置' if 'inventory' in st.session_state else '② 等待填写库存')
     st.caption('首次使用？打开「使用指南」，按步骤体验完整流程。')
+    with st.container(key='ai_quota_panel'):
+        ai_budget_sidebar()
 LABELS={'order_id':'订单编号','sku':'商品编码','order_at':'销售日期','qty':'数量（件）','line_id':'订单行编号','status':'处理状态','on_hand':'现货数量（件）','on_order':'在途数量（件）','as_of':'库存快照日期','lead_days':'采购提前期（天）','pack_size':'每箱件数','min_order':'最小起订量（件）','arrival_confirmed':'确认在途按期到货','source':'参数来源','row_no':'原文件行号','reason_code':'问题类型','hint':'修正建议','policy':'补货策略','date':'日期','demand':'需求代理（件）','arrived':'当日到货（件）','order':'当日下单（件）','ending_stock':'期末现货（件）','shortage':'未满足需求（件）','review':'是否人工复核','fill_rate':'件数满足率','mean_stock':'平均期末库存（件）','stockout_rate':'缺货天数占比','review_rate':'人工复核率','orders':'下单次数','final_pipeline':'期末在途（件）','common_eligible_rate':'双方可自动建议日期占比','inventory_position':'库存位置（件）','forecast_lead':'交期内预测需求（件）','buffer':'误差缓冲（件）','target':'目标库存（件）','mean':'近28日日均销量','protection_days':'保护期（天）','window_start':'历史窗口起始日','window_end':'历史窗口结束日','sample_count':'有效历史天数','error_samples':'误差窗口数量','rule_version':'规则版本','run_id':'运行编号','reason_codes':'复核原因'}
 REASONS={'INVALID_FIELD':'必填内容缺失、日期格式不匹配或数量不是整数','CONFLICTING_LINE_ID':'同一订单行编号对应不同内容，请核对原订单','DUPLICATE_LINE':'重复订单行，已剔除','CANCELLED':'取消订单，不计入销量','RETURN':'退货单独统计，不冲减需求','NOT_COMPLETED':'未完成或零数量订单，不计入销量','NON_PRODUCT':'非商品记录，已排除','SUSPECT_DUPLICATE':'疑似重复但缺少行编号，保留并请人工核对','HISTORY_GAP':'最近28天覆盖不完整，请补齐销售记录并确认覆盖','INSUFFICIENT_ERROR_WINDOWS':'完整误差窗口不足20个，请增加更早的销售历史','ARRIVAL_UNCONFIRMED':'在途到货时间尚未确认，请在库存配置中核对','SNAPSHOT_DATE_MISMATCH':'库存日期与决策日期不一致，请更新库存快照','MISSING_STOCK':'缺少该商品库存，请导入库存配置'}
 def reason_text(code):
