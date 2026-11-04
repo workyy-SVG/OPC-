@@ -71,16 +71,43 @@ def apply_theme():
 [data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"]{background:linear-gradient(130deg,#fff,#f1eafb)!important;border-top-color:#b499d1!important}
 [data-testid="stVerticalBlockBorderWrapper"]{background:#ffffffbb;border-radius:16px;box-shadow:0 8px 25px #30485908}
 .stButton button{border-radius:10px;transition:box-shadow .18s,transform .18s}.stButton button:hover{box-shadow:0 5px 15px #1a485c18;transform:translateY(-1px)}
+.visual-card{background:#fbfdfc;border:1px solid #dce7e2;border-radius:16px;padding:18px 20px;box-shadow:0 6px 20px #203c3a08;color:#183a36}
+.visual-card h3{font-size:1.02rem;margin:0 0 4px;padding:0;color:#183a36}
+.visual-note{font-size:.84rem;color:#516966;margin:0 0 14px}
+.visual-track{background:#e9efed;height:9px;border-radius:100px;overflow:hidden;display:flex}
+.visual-track span{display:block;height:100%}
+.visual-summary{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.visual-tile{flex:1 1 96px;padding:8px 10px;background:#f1f6f4;border-radius:9px;min-width:0}
+.visual-tile strong{display:block;font-size:1.1rem;line-height:1.3;font-variant-numeric:tabular-nums}
+.visual-tile small{font-size:.8rem;color:#425c58}
+.visual-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.visual-row{margin:12px 0 0}
+.visual-row-label{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:5px;font-size:.86rem;color:#425c58}
+.visual-row-label strong{white-space:nowrap;color:#183a36;font-variant-numeric:tabular-nums}
+.visual-foot{font-size:.8rem;color:#516966;margin:12px 0 0}
 @media(max-width:768px){.workspace-banner{padding:20px}.workspace-banner h2{font-size:24px}.banner-flow{font-size:12px}}
 </style>''',unsafe_allow_html=True)
 
 
 def show_chart(figure, caption, height=340):
-    """Display an interactive chart with a short reading guide."""
+    """Keep chart headings, axes, legends and reading guides separate."""
+    title = figure.layout.title.text
     figure.update_layout(
-        height=height,
-        margin=dict(l=12, r=12, t=54, b=12),
-        legend=dict(orientation='h', y=-0.24, title=None),
+        template='plotly_white',
+        title_text=None,
+        height=height - 26,
+        margin=dict(l=10, r=18, t=12, b=16),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        font=dict(color='#304e4b', size=13),
+        legend=dict(orientation='h', x=0, y=1.02, yanchor='bottom', title=None),
+        hoverlabel=dict(bgcolor='#193d3a', font_color='white'),
     )
-    st.plotly_chart(figure, width='stretch', config={'displayModeBar':False})
-    st.caption(caption)
+    figure.update_xaxes(automargin=True, gridcolor='#e6eeeb', zerolinecolor='#d6e3de')
+    figure.update_yaxes(automargin=True, gridcolor='#e6eeeb', zerolinecolor='#d6e3de')
+    with st.container(border=True):
+        if title:
+            st.markdown(f'**{title}**')
+        st.plotly_chart(figure, width='stretch', theme=None, config={'displayModeBar':False})
+        st.caption(caption)
+
