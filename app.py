@@ -103,7 +103,7 @@ st.title(page_name(page))
 HEADINGS={
 '模拟经营':('让历史交易逐日驱动经营演示','自动导入历史销量、模拟补货与到货，逐日查看库存流转。','历史模拟'),
 '采购与到货':('把补货建议落到采购与到货','记录人工确认、分批到货与每日库存风险。','采购执行'),
-'公平实验室':('在相同库存预算下检验策略','在接近的库存占用下比较满足率，再看成本假设改变时的结果。','实验验证'),
+'公平实验室':('用留出期验证补货方法','两种方法先用较早数据选参，再用同一个满足率目标比较后续库存占用。','实验验证'),
 '经营总览':('从销售记录到补货建议','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
 '导入与质检':('先把销售记录整理清楚','导入、匹配、核验，确保每一条建议都有可靠输入。','数据准备'),
 '库存配置':('把真实库存和采购条件填准确','逐商品核对现货、在途与交期，为补货决策做好准备。','库存管理'),
@@ -153,7 +153,7 @@ def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source):
     data_hash = hashlib.sha256(raw).hexdigest()
     previous = st.session_state.get('daily')
     if previous is None or st.session_state.get('data_hash') != data_hash or not previous.equals(daily):
-        for key in ('inventory', 'replay_result', 'scenario_result', 'study', 'simulation',
+        for key in ('inventory', 'replay_result', 'scenario_result', 'study', 'holdout_result', 'simulation',
                     'purchases', 'purchase_workspace', 'stock_movements', 'receipt_notice',
                     'ai_purchase_draft', 'ai_explanation'):
             st.session_state.pop(key, None)
@@ -379,69 +379,78 @@ elif page=='使用指南':
 - **共享额度**　侧栏显示千问和 DeepSeek 当日合计剩余次数，北京时间零点重置。
 """)
 elif page=='公平实验室':
-    from core.study import run_study
+    from core import study
     require_sales()
-    st.caption('好比两家店用差不多的库存，看谁能少缺货。初次使用可保留默认设置直接运行，成本是演示假设。')
-    daily=st.session_state.daily
-    skus = list(daily.sku.unique())
-    selected=st.multiselect('参与实验的商品', skus, default=skus[:3], placeholder='请选择商品', format_func=product_label)
-    dates=date_range('实验测试日期',((daily.date.max()-pd.Timedelta(days=13)).date(),daily.date.max().date()))
-    c1,c2,c3=st.columns(3)
-    lead=c1.number_input('交期（天）',1,30,3,help='从下单到到货的天数，默认用 3 天演示。')
-    window=c2.selectbox('参考过去多少天销量',[14,28,56],index=1,help='默认 28 天，覆盖四个完整星期。')
-    quantile=c3.selectbox('预测误差取值水平',[.8,.9,.95],index=1,format_func=lambda value:f'{value:.0%}',
-                          help='默认 90%，用历史偏差中偏大的值留余量。比例越高，通常留得越多。')
-    holding=st.number_input('每件每天持有成本（元，假设值）',min_value=.01,value=1.,help='一件货多存一天的费用，例如仓储和资金占用。')
-    penalty=st.number_input('每件缺货成本（元，假设值）',min_value=0.,value=10.,help='少卖一件的估算损失。默认 10 元用于演示。')
-    ordering=st.number_input('每次下单成本（元，假设值）',min_value=0.,value=0.,help='每次采购额外产生的固定费用，例如运费。暂不计入可填 0。')
-    st.caption('两种方法都从 20 件现货开始，起初没有在途，每箱 1 件。')
-    with st.expander('实验术语与适用范围'):
-        st.write('**被支配**　有另一组参数用同样多或更少的库存，满足率同样高或更高，且至少一项更好。')
-        st.write('**等库存插值**　若两点库存水平不同，用相邻结果估算同等库存下的满足率。估算限于已测试的范围。')
-        st.write('**成本敏感性**　调高或调低缺货损失与库存费用的比例，看哪种方法的模拟成本更低。')
-        st.write('**事后参照**　看完这段销量才挑出的设置，适合用于比较这次结果。实际采购仍需独立验证。')
-    if st.button('运行公平对照实验',type='primary',disabled=not selected):
-        cfg=dict(start=str(dates[0]),end=str(dates[1]),initial_stock=20,lead_days=lead,window=window,quantile=quantile)
-        with st.spinner('正在逐商品扫描策略参数，请稍候…'):
-            try:
-                result=run_study(daily[daily.sku.isin(selected)],cfg,holding=holding,shortage_cost=penalty,order_cost=ordering)
-                st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,data_hash=st.session_state.data_hash,version=VERSION,bootstrap_seed=42,bootstrap_repeats=2000))
-            except ValueError as e: st.error(str(e))
-    if 'study' in st.session_state:
-        result,meta=st.session_state.study
-        saved = meta['config']
-        st.subheader('本次实验结果与图表说明')
-        st.caption(f"已运行 {len(meta['skus'])} 个商品 / {saved['start']} 至 {saved['end']} / 交期 {saved['lead_days']} 天 / 历史窗口 {saved['window']} 天。修改输入后需重新运行。")
-        st.write('先看参数散点，再看是否有可比较的等库存结果。历史模拟对比固定一组条件，这里同时扫描两类规则的多个参数。')
-        study_charts(result)
-        table_view(result['equal_inventory'].rename(columns={'scale':'误差系数','mean_stock':'平均库存','adaptive_fill':'历史误差满足率','baseline_interpolated':'固定比例等库存插值','difference':'满足率差（历史误差减固定比例）'}))
-        ci=result['ci']
-        st.subheader('看完这段历史后选出的参考设置')
-        st.caption('按本次模拟成本给每个商品挑选固定缓冲比例，用来对照结果。')
-        table_view(chinese(result['oracle'][['sku','parameter','fill_rate','mean_stock','cost']]).rename(columns={'parameter':'事后选择比例','cost':'假设总成本'}))
-        st.subheader('改变成本假设后，哪种方法花费更少？')
-        st.write('总成本 = 库存件天 × 每件每日持有成本 + 缺货件数 × 缺货成本 + 下单次数 × 每次下单成本。未计入售价、利润、采购成本及期末在途估值。')
-        scan=result['cost_scan'];winners=scan.loc[scan.groupby('shortage_holding_ratio').cost.idxmin()]
-        cost_lines = scan.loc[scan.groupby(['shortage_holding_ratio','policy']).cost.idxmin()].copy()
-        cost_lines = chinese(cost_lines)
-        costs = scan.groupby(['shortage_holding_ratio','policy']).cost.min().unstack()
-        delta = costs.adaptive - costs.baseline
-        tied = delta.abs() < 1e-8
-        st.info(f'**本次成本结果**　扫描的 {len(delta)} 种成本比中，历史误差缓冲最低成本更低的有 '
-                f'{int(((delta < 0) & ~tied).sum())} 种，固定比例缓冲更低的有 {int(((delta > 0) & ~tied).sum())} 种，'
-                f'两者相同的有 {int(tied.sum())} 种。')
-        show_chart(px.line(cost_lines.sort_values('shortage_holding_ratio'), x='shortage_holding_ratio', y='cost',
-                           color='补货策略', markers=True, color_discrete_map=COLORS, hover_data=['parameter'],
-                           labels={'shortage_holding_ratio':'缺货成本 / 持有成本','cost':'模拟总成本（元）','parameter':'参数'},
-                           title='两类规则在各成本比下的最低扫描成本'),
-                   '在同一个成本比下，越低表示模拟总成本越少。每个点取该规则的最低扫描成本，相邻点可能来自不同参数。')
-        table_view(winners.replace({'baseline':'固定比例','adaptive':'历史误差'}).rename(columns={'shortage_holding_ratio':'缺货/持有成本比','policy':'扫描内最低成本策略','parameter':'参数','cost':'总成本'}))
-        buf=io.BytesIO()
-        with zipfile.ZipFile(buf,'w') as z:
-            for name,df in result.items():
-                if isinstance(df,pd.DataFrame): z.writestr(name+'.csv',csv_bytes(df))
-            z.writestr('manifest.json',json.dumps(meta|{'ci':ci},ensure_ascii=False,indent=2))
-        st.download_button('下载完整公平实验记录',buf.getvalue(),'公平实验.zip')
+    from holdout_ui import render
+    if not getattr(study, 'SAME_COHORT_AXES', False):
+        reload(study)
+    daily = st.session_state.daily
+    comparison_tab, exploration_tab = st.tabs(['留出期对照', '探索参数与成本'])
+    with comparison_tab:
+        render(daily, product_label)
+    with exploration_tab:
+        st.caption('这部分用同一段历史扫描参数，适合找取舍和试算成本。留出期对照另行锁定参数检验。')
+        daily=st.session_state.daily
+        skus = list(daily.sku.unique())
+        selected=st.multiselect('参与实验的商品', skus, default=skus[:3], placeholder='请选择商品', format_func=product_label)
+        covered = daily.loc[daily.coverage_status.eq('confirmed'), 'date']
+        dates=date_range('实验测试日期',(max(covered.min(), covered.max()-pd.Timedelta(days=13)).date(),covered.max().date()))
+        c1,c2,c3=st.columns(3)
+        lead=c1.number_input('交期（天）',1,30,3,help='从下单到到货的天数，默认用 3 天演示。')
+        window=c2.selectbox('参考过去多少天销量',[14,28,56],index=1,help='默认 28 天，覆盖四个完整星期。')
+        quantile=c3.selectbox('预测误差取值水平',[.8,.9,.95],index=1,format_func=lambda value:f'{value:.0%}',
+                              help='默认 90%，用历史偏差中偏大的值留余量。比例越高，通常留得越多。')
+        holding=st.number_input('每件每天持有成本（元，假设值）',min_value=.01,value=1.,help='一件货多存一天的费用，例如仓储和资金占用。')
+        penalty=st.number_input('每件缺货成本（元，假设值）',min_value=0.,value=10.,help='少卖一件的估算损失。默认 10 元用于演示。')
+        ordering=st.number_input('每次下单成本（元，假设值）',min_value=0.,value=0.,help='每次采购额外产生的固定费用，例如运费。暂不计入可填 0。')
+        st.caption('两种方法都从 20 件现货开始，起初没有在途，每箱 1 件。')
+        with st.expander('实验术语与适用范围'):
+            st.write('**被支配**　有另一组参数用同样多或更少的库存，满足率同样高或更高，且至少一项更好。')
+            st.write('**等库存插值**　若两点库存水平不同，用相邻结果估算同等库存下的满足率。估算限于已测试的范围。')
+            st.write('**成本敏感性**　调高或调低缺货损失与库存费用的比例，看哪种方法的模拟成本更低。')
+            st.write('**事后参照**　看完这段销量才挑出的设置，适合用于比较这次结果。实际采购仍需独立验证。')
+        if st.button('运行公平对照实验',type='primary',disabled=not selected):
+            cfg=dict(start=str(dates[0]),end=str(dates[1]),initial_stock=20,lead_days=lead,window=window,quantile=quantile)
+            with st.spinner('正在逐商品扫描策略参数，请稍候…'):
+                try:
+                    result=study.run_study(daily[daily.sku.isin(selected)],cfg,holding=holding,shortage_cost=penalty,order_cost=ordering)
+                    st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,data_hash=st.session_state.data_hash,version=VERSION,bootstrap_seed=42,bootstrap_repeats=2000,axis_cohort='positive_demand'))
+                except ValueError as e: st.error(str(e))
+        if 'study' in st.session_state and st.session_state.study[1].get('axis_cohort') == 'positive_demand':
+            result,meta=st.session_state.study
+            saved = meta['config']
+            st.subheader('本次实验结果与图表说明')
+            st.caption(f"已运行 {len(meta['skus'])} 个商品 / {saved['start']} 至 {saved['end']} / 交期 {saved['lead_days']} 天 / 历史窗口 {saved['window']} 天。修改输入后需重新运行。")
+            st.write('先看参数散点，再看是否有可比较的等库存结果。两条坐标轴均使用该段有销量的商品，成本统计覆盖全部已选商品。')
+            study_charts(result)
+            table_view(result['equal_inventory'].rename(columns={'scale':'误差系数','mean_stock':'平均库存','adaptive_fill':'历史误差满足率','baseline_interpolated':'固定比例等库存插值','difference':'满足率差（历史误差减固定比例）'}))
+            ci=result['ci']
+            st.subheader('看完这段历史后选出的参考设置')
+            st.caption('按本次模拟成本给每个商品挑选固定缓冲比例，用来对照结果。')
+            table_view(chinese(result['oracle'][['sku','parameter','fill_rate','mean_stock','cost']]).rename(columns={'parameter':'事后选择比例','cost':'假设总成本'}))
+            st.subheader('改变成本假设后，哪种方法花费更少？')
+            st.write('总成本 = 库存件天 × 每件每日持有成本 + 缺货件数 × 缺货成本 + 下单次数 × 每次下单成本。未计入售价、利润、采购成本及期末在途估值。')
+            scan=result['cost_scan'];winners=scan.loc[scan.groupby('shortage_holding_ratio').cost.idxmin()]
+            cost_lines = scan.loc[scan.groupby(['shortage_holding_ratio','policy']).cost.idxmin()].copy()
+            cost_lines = chinese(cost_lines)
+            costs = scan.groupby(['shortage_holding_ratio','policy']).cost.min().unstack()
+            delta = costs.adaptive - costs.baseline
+            tied = delta.abs() < 1e-8
+            st.info(f'**本次成本结果**　扫描的 {len(delta)} 种成本比中，历史误差缓冲最低成本更低的有 '
+                    f'{int(((delta < 0) & ~tied).sum())} 种，固定比例缓冲更低的有 {int(((delta > 0) & ~tied).sum())} 种，'
+                    f'两者相同的有 {int(tied.sum())} 种。')
+            show_chart(px.line(cost_lines.sort_values('shortage_holding_ratio'), x='shortage_holding_ratio', y='cost',
+                               color='补货策略', markers=True, color_discrete_map=COLORS, hover_data=['parameter'],
+                               labels={'shortage_holding_ratio':'缺货成本 / 持有成本','cost':'模拟总成本（元）','parameter':'参数'},
+                               title='两类规则在各成本比下的最低扫描成本'),
+                       '在同一个成本比下，越低表示模拟总成本越少。每个点取该规则的最低扫描成本，相邻点可能来自不同参数。')
+            table_view(winners.replace({'baseline':'固定比例','adaptive':'历史误差'}).rename(columns={'shortage_holding_ratio':'缺货/持有成本比','policy':'扫描内最低成本策略','parameter':'参数','cost':'总成本'}))
+            buf=io.BytesIO()
+            with zipfile.ZipFile(buf,'w') as z:
+                for name,df in result.items():
+                    if isinstance(df,pd.DataFrame): z.writestr(name+'.csv',csv_bytes(df))
+                z.writestr('manifest.json',json.dumps(meta|{'ci':ci},ensure_ascii=False,indent=2))
+            st.download_button('下载完整公平实验记录',buf.getvalue(),'公平实验.zip')
 elif page=='数据与说明':
     st.markdown(Path('DATA_SOURCES.md').read_text(encoding='utf-8'))
     manifest=Path('data/demo/manifest.json').read_bytes()
@@ -604,6 +613,8 @@ else:
                 st.subheader('策略对比结果')
                 replay_reading(metrics)
                 replay_comparison(metrics)
+                st.button('到公平对比实验验证同一满足率目标', key='replay_to_holdout',
+                          on_click=navigate, args=('公平实验室',))
                 table_view(chinese(metrics),hide_index=True)
                 chart=chinese(timeline)
                 show_chart(px.line(chart,x='日期',y='期末现货（件）',color='补货策略',color_discrete_map=COLORS,title='期末库存轨迹'),
