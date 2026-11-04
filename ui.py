@@ -73,3 +73,14 @@ def apply_theme():
 .stButton button{border-radius:10px;transition:box-shadow .18s,transform .18s}.stButton button:hover{box-shadow:0 5px 15px #1a485c18;transform:translateY(-1px)}
 @media(max-width:768px){.workspace-banner{padding:20px}.workspace-banner h2{font-size:24px}.banner-flow{font-size:12px}}
 </style>''',unsafe_allow_html=True)
+
+
+def show_chart(figure, caption, height=340):
+    """Display an interactive chart with a short reading guide."""
+    figure.update_layout(
+        height=height,
+        margin=dict(l=12, r=12, t=54, b=12),
+        legend=dict(orientation='h', y=-0.24, title=None),
+    )
+    st.plotly_chart(figure, width='stretch', config={'displayModeBar':False})
+    st.caption(caption)
