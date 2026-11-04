@@ -13,7 +13,11 @@ from core.purchasing import add_purchase, integer, day
 def provider_picker(key):
     provider = st.selectbox('AI服务', ['qwen','deepseek'], format_func=lambda p: '千问' if p == 'qwen' else 'DeepSeek', key=key)
     if not configured(provider):
-        st.caption('该服务尚未配置服务端API Key，手动功能仍可使用。')
+        name = 'DASHSCOPE_API_KEY' if provider == 'qwen' else 'DEEPSEEK_API_KEY'
+        st.warning(f'当前应用未读到 {name}，手动功能仍可使用。')
+        st.caption('请在本应用 Manage app → Settings → Secrets 中，将对应名称放在文件顶部（任何[分组]之前），保存后重启应用。不要把真实Key发到聊天或截图里。')
+    else:
+        st.caption('已读取该服务的Key；调用权限与额度以实际请求为准。')
     return provider
 
 
@@ -38,7 +42,9 @@ def headers_ui(columns):
 def purchasing_ai(inventory, as_of, persist):
     with st.expander('AI录采购：文字或单据照片'):
         provider = provider_picker('purchase_ai_provider')
-        text = st.text_area('采购描述或单据补充说明', placeholder='例如：商品001，10箱，每箱24件，周五到货')
+        multiline = st.checkbox('使用多行输入（加载异常时请取消勾选）', key='purchase_multiline')
+        widget = st.text_area if multiline else st.text_input
+        text = widget('采购描述或单据补充说明', placeholder='例如：商品001，10箱，每箱24件，周五到货', key='purchase_description')
         photo = st.file_uploader('采购单或送货单照片', type=['png','jpg','jpeg'])
         reference = st.date_input('相对日期参考日', value=datetime.now(ZoneInfo('Asia/Shanghai')).date())
         consent = st.checkbox('我同意发送以上描述和图片及候选商品编码到所选AI服务，已移除隐私信息')

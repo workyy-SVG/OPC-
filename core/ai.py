@@ -21,16 +21,29 @@ PROVIDERS = {
 
 def setting(name, default=None):
     value = os.environ.get(name)
-    if value:
-        return value
+    if value and value.strip():
+        return value.strip()
     # Community Cloud stores credentials in st.secrets; load explicitly rather
     # than relying on root secrets already having populated the environment.
     import streamlit as st
     try:
         value = st.secrets.get(name)
+        if not isinstance(value, str) or not value.strip():
+            # Accept both root Secrets and explicitly documented grouped forms.
+            aliases = {'DASHSCOPE_API_KEY': ('qwen', 'QWEN_API_KEY'),
+                       'DEEPSEEK_API_KEY': ('deepseek', 'DEEPSEEK_API_KEY')}
+            if name in aliases:
+                group, alias = aliases[name]
+                value = st.secrets.get(alias)
+                for section, field in [('ai', name), (group, 'api_key')]:
+                    if isinstance(value, str) and value.strip():
+                        break
+                    nested = st.secrets.get(section)
+                    if hasattr(nested, 'get'):
+                        value = nested.get(field)
     except FileNotFoundError:
         value = None
-    return value if isinstance(value, str) and value else default
+    return value.strip() if isinstance(value, str) and value.strip() else default
 
 
 def configured(provider='qwen'):

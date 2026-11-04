@@ -79,7 +79,7 @@ def test_no_key_manual_page_still_works(monkeypatch):
     app=AppTest.from_file(Path(__file__).resolve().parents[1]/'app.py',default_timeout=60).run()
     next(b for b in app.button if b.label=='用示例立即体验').click().run()
     app.radio(key='navigation').set_value('采购与到货').run()
-    next(w for w in app.text_area if w.label=='采购描述或单据补充说明').set_value('订10件')
+    next(w for w in app.text_input if w.label=='采购描述或单据补充说明').set_value('订10件')
     next(w for w in app.checkbox if w.label.startswith('我同意发送')).check().run()
     next(b for b in app.button if b.label=='生成采购草稿').click().run()
     assert not app.exception
@@ -92,7 +92,7 @@ def test_ai_draft_page_never_writes_without_confirmation(monkeypatch):
     app=AppTest.from_file(Path(__file__).resolve().parents[1]/'app.py',default_timeout=60).run()
     next(b for b in app.button if b.label=='用示例立即体验').click().run()
     app.radio(key='navigation').set_value('采购与到货').run()
-    next(w for w in app.text_area if w.label=='采购描述或单据补充说明').set_value('订12件')
+    next(w for w in app.text_input if w.label=='采购描述或单据补充说明').set_value('订12件')
     next(w for w in app.checkbox if w.label.startswith('我同意发送')).check().run()
     next(b for b in app.button if b.label=='生成采购草稿').click().run()
     assert not app.exception and not app.session_state.purchases
@@ -110,3 +110,23 @@ def test_community_cloud_secrets_are_read(monkeypatch):
     assert ai.configured('qwen')
     assert ai.setting('DASHSCOPE_API_KEY') == 'test-cloud-secret'
     assert ai.setting('QWEN_MODEL','qwen-plus') == 'qwen-plus'
+
+
+@pytest.mark.parametrize('secrets', [
+    {'qwen':{'api_key':' test-grouped '}},
+    {'ai':{'DASHSCOPE_API_KEY':' test-grouped '}},
+    {'QWEN_API_KEY':' test-grouped '},
+])
+def test_grouped_qwen_secrets(monkeypatch,secrets):
+    import streamlit as st
+    monkeypatch.delenv('DASHSCOPE_API_KEY',raising=False)
+    monkeypatch.setattr(st,'secrets',secrets)
+    assert ai.setting('DASHSCOPE_API_KEY')=='test-grouped'
+    assert ai.configured('qwen')
+
+
+def test_grouped_deepseek_secrets(monkeypatch):
+    import streamlit as st
+    monkeypatch.delenv('DEEPSEEK_API_KEY',raising=False)
+    monkeypatch.setattr(st,'secrets',{'deepseek':{'api_key':'test-grouped'}})
+    assert ai.setting('DEEPSEEK_API_KEY')=='test-grouped'
