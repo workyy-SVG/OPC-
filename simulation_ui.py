@@ -7,6 +7,9 @@ from ui import show_chart
 from core.simulation import create, step, report, export_json, fingerprint
 
 
+ONBOARDING_REVISION = 1
+
+
 LABELS = {'date':'模拟日期','opening_stock':'日初现货（到货前）','arrived':'模拟到货',
           'historical_demand':'历史销量代理','fulfilled':'模拟实际出库','shortage':'模拟未满足需求',
           'order':'自动模拟采购','ending_stock':'模拟期末现货','on_order':'模拟在途','review':'需人工复核',
@@ -15,12 +18,12 @@ LABELS = {'date':'模拟日期','opening_stock':'日初现货（到货前）','a
           'type':'模拟变动类型','delta':'数量变动','before':'变动前现货','after':'变动后现货'}
 
 
-def render(daily):
-    st.warning('历史数据驱动的模拟经营：不是实时交易API，不代表真实门店经营或收益；不会修改库存配置、采购台账，也不调用AI。')
+def render(daily, product_label=str):
+    st.caption('这个演练用历史销量和假设库存逐日计算，结果保存在独立的模拟记录中。')
     st.write('每天依次：模拟到货入库 → 仅依据前日及以前销量生成采购 → 载入当日历史销量并模拟出库。库存不足时记录未满足需求，不出现负库存。')
     skus = sorted(daily.sku.unique().tolist())
     default = skus.index('85123A') if '85123A' in skus else 0
-    sku = st.selectbox('模拟商品', skus, index=default)
+    sku = st.selectbox('模拟商品', skus, index=default, format_func=product_label)
     selected = daily[daily.sku == sku].copy()
     start_default = max(selected.date.min(), selected.date.max() - pd.Timedelta(days=29))
     with st.form('simulation_setup'):
@@ -29,7 +32,7 @@ def render(daily):
         end = right.date_input('模拟结束日期', value=selected.date.max().date())
         initial = st.number_input('模拟初始库存', min_value=0, value=100, step=1)
         lead = st.number_input('模拟采购交期（天）', min_value=1, max_value=365, value=3, step=1)
-        pack = st.number_input('模拟箱规（件）', min_value=1, value=6, step=1)
+        pack = st.number_input('模拟每箱件数', min_value=1, value=6, step=1)
         policy = st.selectbox('模拟补货规则', ['adaptive','baseline'], format_func=lambda p:'历史误差缓冲' if p=='adaptive' else '固定20%缓冲')
         if st.form_submit_button('创建或重置模拟'):
             try:
@@ -46,7 +49,7 @@ def render(daily):
         st.session_state.simulation_running = False
         st.warning('当前商品或数据已变化，请重新创建模拟。旧结果未混入新数据。')
         return
-    st.caption(f"本次模拟：{state['sku']} · {state['config']['start']} 至 {state['config']['end']} · 初始库存{state['config']['initial_stock']}件 · 交期{state['config']['lead_days']}天 · 箱规{state['config']['pack_size']}件。修改表单后须创建新模拟才生效。")
+    st.caption(f"本次模拟 {state['sku']} · {state['config']['start']} 至 {state['config']['end']} · 初始库存 {state['config']['initial_stock']} 件 · 交期 {state['config']['lead_days']} 天 · 每箱 {state['config']['pack_size']} 件。修改表单后须重新创建模拟。")
     st.session_state.setdefault('simulation_running', False)
     a,b,c = st.columns(3)
     if a.button('逐日推进', disabled=state['completed'] or st.session_state.simulation_running):
