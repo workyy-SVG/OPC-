@@ -16,12 +16,31 @@ def test_demo_replay_and_actual_purchase_gate():
     assert any(m.label == '建议下单' and int(m.value) > 0 for m in app.metric)
     app.radio(key='usage_mode').set_value('实际采购准备').run()
     assert not app.exception
+    assert any(m.label == '建议下单' and int(m.value) > 0 for m in app.metric)
+    click(app, '继续演示')
+    assert app.radio(key='usage_mode').value == '演示探索'
+    app.radio(key='usage_mode').set_value('实际采购准备').run()
+    click(app, '确认切换')
     assert any(m.label == '人工复核' and int(m.value) == 20 for m in app.metric)
+    assert any('20 个商品缺少已核实的实际库存' in warning.value for warning in app.warning)
     app.radio(key='navigation').set_value('策略回放').run()
     click(app, '运行双策略回放')
     timeline, metrics, config, sku = app.session_state['replay_result']
     assert timeline.demand.sum() > 0
     assert metrics.fill_rate.notna().all()
+
+
+def test_empty_pages_offer_next_actions_and_demo_stays_on_page():
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / 'app.py', default_timeout=60).run()
+    for page in ('库存配置', '补货清单', '策略回放', '公平实验室', '采购与到货', '模拟经营'):
+        app.radio(key='navigation').set_value(page).run()
+        assert {'前往导入与质检', '加载示例数据'} <= {b.label for b in app.button}
+    click(app, '加载示例数据')
+    assert app.session_state['navigation'] == '模拟经营'
+    app.radio(key='navigation').set_value('导入与质检').run()
+    assert any('已核验' in item.value and '5,556' in item.value for item in app.success)
+    assert not any(b.label == '一键加载 UCI 真实交易样本' for b in app.button)
+    assert len(app.session_state['product_names']) == 20
 
 
 def test_bulk_changes_invalidate_verification():
