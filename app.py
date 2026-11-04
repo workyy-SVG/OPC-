@@ -427,7 +427,7 @@ else:
                               color_discrete_map={'建议下单':'#217664','暂不补货':'#4d7193','人工复核':'#b15a25'},
                               title='筛选结果的补货状态'),
                        '人工复核商品需要补齐资料后才能给出数量。上方指标统计全部商品。', height=290)
-            orders = filtered[filtered.status == '建议下单'].nlargest(12,'qty')
+            orders = filtered[filtered.status == '建议下单'].sort_values('qty', ascending=False, kind='stable').head(12)
             if not orders.empty:
                 figure = px.bar(orders, x='qty', y='sku', hover_data=['商品名称'], orientation='h',
                                 labels={'sku':'商品编码','qty':'建议补货（件）'},
