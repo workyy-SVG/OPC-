@@ -80,7 +80,7 @@ def test_ui():
  a=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py'),default_timeout=60).run();assert not a.exception
  a.sidebar.radio[0].set_value('导入与质检').run()
  next(b for b in a.button if b.label=='一键加载 UCI 真实交易样本').click().run();assert not a.exception
- next(w for w in a.checkbox if w.label=='我确认该区间每天完整导出；无订单日期可视为零销量').check().run()
+ a.checkbox(key='sales_coverage_confirmed').check().run()
  next(b for b in a.button if b.label=='核验并使用此数据').click().run();assert not a.exception
  for page in ['库存配置','补货清单','策略回放','公平实验室','使用指南','数据与说明']:
   a.sidebar.radio[0].set_value(page).run(timeout=60);assert not a.exception

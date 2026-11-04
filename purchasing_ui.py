@@ -12,9 +12,13 @@ from core.policy import recommend
 from core.purchasing import add_purchase, receive, project, save_workspace, load_workspace, receive_into_inventory
 
 
-def render(daily, inventory, as_of, require_actual=False):
+ONBOARDING_REVISION = 1
+
+
+def render(daily, inventory, as_of, require_actual=False, product_label=str):
     st.subheader('采购与到货')
     st.caption('先核对建议，再登记人工确认的采购。记录不会向供应商自动下单。')
+    st.caption(f'本次库存决策日为 {as_of.date()}，对应销售覆盖结束后的第一天。示例使用历史日期。')
     st.session_state.setdefault('purchase_workspace', uuid4().hex)
     st.session_state.setdefault('purchases', [])
     st.session_state.setdefault('stock_movements', [])
@@ -45,7 +49,7 @@ def render(daily, inventory, as_of, require_actual=False):
     from ai_ui import purchasing_ai
     purchasing_ai(inventory, as_of, persist)
 
-    sku = st.selectbox('采购商品', inventory.sku.tolist())
+    sku = st.selectbox('采购商品', inventory.sku.tolist(), format_func=product_label)
     stock = inventory.set_index('sku').loc[sku].to_dict() | {'sku': sku}
     history = daily[daily.sku == sku]
     related = [r for r in st.session_state.purchases if r['sku'] == sku]
@@ -64,7 +68,7 @@ def render(daily, inventory, as_of, require_actual=False):
         qty = st.number_input('确认采购数量（件）', min_value=1, value=max(1, int(suggested or 1)), step=1)
         ordered = st.date_input('采购日期', value=as_of.date())
         expected = st.date_input('预计到货日期', value=(as_of + pd.Timedelta(days=int(stock['lead_days']))).date())
-        reason = st.text_input('确认或修改原因', placeholder='例如：供应商箱规、预算调整、人工复核依据')
+        reason = st.text_input('确认或修改原因', placeholder='例如：每箱件数、预算调整、人工复核依据')
         acknowledged = st.checkbox('我已核对库存、已有采购及供应商条件，确认登记此笔采购')
         if st.form_submit_button('登记确认采购'):
             try:

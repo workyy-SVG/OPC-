@@ -1,8 +1,5 @@
 """Explicit, reviewable AI actions for existing workflows."""
 import json
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 import pandas as pd
 import streamlit as st
 
@@ -10,25 +7,25 @@ from core.ai import AIError, configured, purchase_draft, match_headers, explain
 from core.purchasing import add_purchase, integer, day
 
 
+ONBOARDING_REVISION = 1
+
+
 def provider_picker(key):
-    provider = st.selectbox('AI服务', ['qwen','deepseek'], format_func=lambda p: '千问' if p == 'qwen' else 'DeepSeek', key=key)
-    if not configured(provider):
-        name = 'DASHSCOPE_API_KEY' if provider == 'qwen' else 'DEEPSEEK_API_KEY'
-        st.warning(f'当前应用未读到 {name}，手动功能仍可使用。')
-        st.caption('请在本应用 Manage app → Settings → Secrets 中，将对应名称放在文件顶部（任何[分组]之前），保存后重启应用。不要把真实Key发到聊天或截图里。')
-    else:
-        st.caption('已读取该服务的Key；调用权限与额度以实际请求为准。')
-    return provider
+    provider = st.selectbox('AI 服务', ['qwen','deepseek'], format_func=lambda p: '千问' if p == 'qwen' else 'DeepSeek', key=key,
+                            help='两种 AI 服务共用每日调用额度。识别照片时选千问。')
+    available = configured(provider)
+    st.caption('AI 服务已就绪。' if available else '所选 AI 服务暂不可用，仍可手动填写。')
+    return provider, available
 
 
 def headers_ui(columns):
     with st.expander('智能匹配表头'):
         st.caption('先识别常见列名。勾选 AI 后，只向所选服务发送列名来匹配陌生字段。填入后请核对四项映射。')
-        provider = provider_picker('header_provider')
-        use_ai = st.checkbox('陌生列名使用AI识别（会发送列名）')
+        provider, available = provider_picker('header_provider')
+        use_ai = st.checkbox('陌生列名使用AI识别（会发送列名）', disabled=not available)
         if st.button('匹配并填写字段'):
             try:
-                matches = match_headers(columns, provider, use_ai)
+                matches = match_headers(columns, provider, use_ai and available)
                 for field, column in matches.items():
                     st.session_state['map_' + field] = column
                 if len(matches) < 4:
@@ -42,16 +39,18 @@ def headers_ui(columns):
 def purchasing_ai(inventory, as_of, persist):
     with st.expander('AI录采购：文字或单据照片'):
         st.caption('把描述或单据转换为采购草稿。请核对总件数与预计到货日期，确认后才会登记到采购台账。')
-        provider = provider_picker('purchase_ai_provider')
+        provider, available = provider_picker('purchase_ai_provider')
         multiline = st.checkbox('使用多行输入（加载异常时请取消勾选）', key='purchase_multiline')
         widget = st.text_area if multiline else st.text_input
         text = widget('采购描述或单据补充说明', placeholder='例如：商品001，10箱，每箱24件，周五到货', key='purchase_description')
         photo = st.file_uploader('采购单或送货单照片', type=['png','jpg','jpeg'])
-        reference = st.date_input('相对日期参考日', value=datetime.now(ZoneInfo('Asia/Shanghai')).date())
+        reference = st.date_input('相对日期参考日', value=as_of.date(), key=f'purchase_reference_{as_of.date()}',
+                                  help='默认和本次库存决策日期一致。「周五」「明天」按此日期理解。')
+        st.caption('照片识别使用千问。识别出的内容会先显示为草稿，供你检查。')
         consent = st.checkbox('我同意发送以上描述和图片及候选商品编码到所选AI服务，已移除隐私信息')
-        st.caption('照片识别须选择千问并配置视觉模型。送货单仅生成草稿，不会直接入库。')
         scope = (tuple(inventory.sku), str(as_of))
-        if st.button('生成采购草稿', disabled=not consent):
+        if st.button('生成采购草稿', disabled=not available or not consent,
+                     help='确认上方数据发送选项后即可生成草稿。'):
             st.session_state.pop('ai_purchase_draft', None)
             try:
                 image = (photo.getvalue(), 'image/png' if photo.name.lower().endswith('.png') else 'image/jpeg') if photo else None
@@ -68,7 +67,7 @@ def purchasing_ai(inventory, as_of, persist):
                                'expected_at':st.column_config.TextColumn('预计到货日期 YYYY-MM-DD'),
                                'note':st.column_config.TextColumn('歧义说明/确认原因')})
             ordered = st.date_input('草稿采购日期', value=as_of.date())
-            verified = st.checkbox('我已逐行核对草稿，包括箱规、日期及已有采购，确认登记')
+            verified = st.checkbox('我已逐行核对草稿，包括每箱件数、日期及已有采购，确认登记')
             if st.button('确认草稿并登记采购', disabled=not verified):
                 try:
                     ledger = st.session_state.purchases
@@ -86,16 +85,17 @@ def purchasing_ai(inventory, as_of, persist):
                     st.error('未登记：' + str(error))
 
 
-def explanation_ui(decisions):
+def explanation_ui(decisions, product_label=str):
     with st.expander('AI补货解释与问答'):
         st.caption('用自然语言读懂某个商品的计算证据，也可询问缺项和核对方法。程序计算的建议数量以清单为准。')
-        provider = provider_picker('explanation_provider')
-        sku = st.selectbox('要解释的商品', decisions.sku.tolist())
+        provider, available = provider_picker('explanation_provider')
+        sku = st.selectbox('要解释的商品', decisions.sku.tolist(), format_func=product_label)
         question = st.text_input('补货问题', value='为什么给出这个建议？我还需要核对什么？')
         consent = st.checkbox('同意发送此商品计算证据及问题到AI服务')
         # JSON serialization replaces NaN with null and avoids raw order rows.
         evidence = json.loads(decisions[decisions.sku == sku].to_json(orient='records'))[0]
-        if st.button('根据证据解释', disabled=not consent):
+        if st.button('根据证据解释', disabled=not available or not consent,
+                     help='选择商品、填写问题并勾选上方同意项后，即可发送给 AI。'):
             st.session_state.pop('ai_explanation', None)
             try:
                 answer = explain(question, evidence, provider)
