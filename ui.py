@@ -32,7 +32,7 @@ def date_range(label,value):
     end=b.text_input('结束日期（年-月-日）',str(value[1]),key=label+'end')
     try:
         first=pd.to_datetime(start,format='%Y-%m-%d').date();last=pd.to_datetime(end,format='%Y-%m-%d').date()
-        if first>last: raise ValueError()
+        if pd.isna(first) or pd.isna(last) or first>last: raise ValueError()
         return first,last
     except ValueError:
         st.error('请按年-月-日填写日期，且开始日期不能晚于结束日期。');st.stop()

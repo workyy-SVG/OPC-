@@ -13,7 +13,9 @@ def parse_orders(raw, mapping=None, date_format='%Y-%m-%d'):
         d=r.to_dict(); reason=None; category='error'
         try:
             if any(str(d[k]).strip()=='' for k in REQUIRED): raise ValueError()
-            d['order_at']=pd.to_datetime(d['order_at'],format=date_format,errors='raise').normalize()
+            parsed_date=pd.to_datetime(d['order_at'],format=date_format,errors='raise')
+            if pd.isna(parsed_date): raise ValueError('日期为空')
+            d['order_at']=parsed_date.normalize()
             q=float(d['qty'])
             if not q.is_integer(): raise ValueError()
             d['qty']=int(q)

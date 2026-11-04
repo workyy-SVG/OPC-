@@ -35,3 +35,12 @@ def test_bulk_changes_invalidate_verification():
     row = app.session_state['inventory'].set_index('sku').loc[sku]
     assert row.lead_days == 7
     assert not row.verified
+
+
+def test_invalid_replay_date_shows_error_without_crashing():
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / 'app.py', default_timeout=60).run()
+    click(app, '用示例立即体验')
+    app.radio(key='navigation').set_value('策略回放').run()
+    app.text_input(key='测试日期start').set_value('NaT').run()
+    assert not app.exception
+    assert any('开始日期不能晚于结束日期' in error.value for error in app.error)

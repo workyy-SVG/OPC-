@@ -6,7 +6,8 @@ import streamlit as st
 import plotly.express as px
 from core.ingest import parse_orders
 from core.demand import build_daily
-from core.policy import recommend
+from core.policy import recommend, VERSION
+from core.inventory import parse_inventory
 from core.replay import run_replay
 from core.export import csv_bytes
 from core.validation import parameter_status, sensitivity, compare_scenarios
@@ -205,7 +206,7 @@ elif page=='公平实验室':
         with st.spinner('正在逐商品扫描策略参数，请稍候…'):
             try:
                 result=run_study(daily[daily.sku.isin(selected)],cfg,holding=holding,shortage_cost=penalty,order_cost=ordering)
-                st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,data_hash=st.session_state.data_hash,version='1.1.0',bootstrap_seed=42,bootstrap_repeats=2000))
+                st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,data_hash=st.session_state.data_hash,version=VERSION,bootstrap_seed=42,bootstrap_repeats=2000))
             except ValueError as e: st.error(str(e))
     if 'study' in st.session_state:
         result,meta=st.session_state.study
@@ -258,14 +259,11 @@ else:
         f=st.file_uploader('批量导入库存 CSV',type='csv')
         if f and st.button('应用库存文件'):
             try:
-                inv=pd.read_csv(f,dtype=str).rename(columns={v:k for k,v in LABELS.items()})
-                inv['arrival_confirmed']=inv['arrival_confirmed'].map({'是':True,'否':False,'True':True,'False':False})
-                inv['parameter_kind']=inv.get('parameter_kind','未核实')
-                inv['verified']=False  # Uploaded claims must be confirmed again in this session.
-                assert set(template.columns)<=set(inv.columns);assert not inv.sku.duplicated().any()
+                inv=pd.read_csv(f,dtype=str,keep_default_na=False).rename(columns={v:k for k,v in LABELS.items()})
+                inv=parse_inventory(inv,template.columns)
                 st.session_state.inventory=inv
                 st.info('导入参数均已重置为未确认，请逐商品核对来源后保存。')
-            except Exception: st.error('库存字段不完整或商品编码重复')
+            except (ValueError, KeyError) as e: st.error(str(e))
         with st.expander('批量设置交期与箱规'):
             with st.form('bulk_stock'):
                 selected_skus=st.multiselect('选择同一供应商或采购条件的商品',st.session_state.inventory.sku.tolist())
@@ -362,7 +360,7 @@ else:
                 table_view(chinese(timeline),hide_index=True)
                 buf=io.BytesIO()
                 with zipfile.ZipFile(buf,'w') as z:
-                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=saved_cfg,sku=saved_sku,data_hash=st.session_state.data_hash,version='1.0.0',evidence_type='模拟回放，不是商户实测',inventory='假设参数',demand='历史销量代理，不含未记录的失销量'),ensure_ascii=False,indent=2))
+                    z.writestr('timeline.csv',csv_bytes(timeline));z.writestr('metrics.csv',csv_bytes(metrics));z.writestr('manifest.json',json.dumps(dict(config=saved_cfg,sku=saved_sku,data_hash=st.session_state.data_hash,version=VERSION,evidence_type='模拟回放，不是商户实测',inventory='假设参数',demand='历史销量代理，不含未记录的失销量'),ensure_ascii=False,indent=2))
                 st.download_button('导出可复现实验 ZIP',buf.getvalue(),'experiment.zip')
             except ValueError as e: st.error(str(e))
         st.subheader('多条件稳健性检查')

@@ -6,6 +6,7 @@ def order_quantity(mean, buffer, stock, lead, minimum, pack):
     return (math.ceil(max(gap,minimum)/pack)*pack if gap else 0),target
 
 def recommend(history, stock, config, as_of):
+    stock=dict(stock)
     date=pd.Timestamp(as_of).normalize(); reasons=[]
     result=dict(sku=stock.get('sku',''),as_of=str(date.date()),status='人工复核',qty=None,rule_version=VERSION,source=stock.get('source','用户输入'))
     from .validation import parameter_status
@@ -14,10 +15,13 @@ def recommend(history, stock, config, as_of):
     if config.get('require_actual') and not parameter_status(stock): reasons.append('UNVERIFIED_PARAMETERS')
     for k in ['on_hand','on_order','lead_days','pack_size','min_order']:
         try:
+            if pd.api.types.is_bool(stock[k]): raise ValueError('布尔值不是库存参数')
             v=float(stock[k]); assert math.isfinite(v) and v.is_integer() and v >= (1 if k in ['lead_days','pack_size'] else 0)
-        except (KeyError,ValueError,TypeError,AssertionError): reasons.append('INVALID_'+k.upper())
+            stock[k]=int(v)
+        except (KeyError,ValueError,TypeError,OverflowError,AssertionError): reasons.append('INVALID_'+k.upper())
     if str(stock.get('as_of',''))[:10]!=str(date.date()): reasons.append('SNAPSHOT_DATE_MISMATCH')
-    if not stock.get('arrival_confirmed',False): reasons.append('ARRIVAL_UNCONFIRMED')
+    confirmed=stock.get('arrival_confirmed',False)
+    if not (pd.api.types.is_bool(confirmed) and bool(confirmed)): reasons.append('ARRIVAL_UNCONFIRMED')
     s=history.set_index('date').sold_qty.sort_index(); s=s[s.index<date]
     window=int(config.get('window',28)); quantile=float(config.get('quantile',.9))
     if window<1 or not 0<quantile<=1: raise ValueError('窗口和分位数不合法')

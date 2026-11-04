@@ -23,11 +23,56 @@ def test_ingest():
 def test_conflict():
  d=pd.DataFrame(dict(order_id=['1','1'],sku=['01','01'],order_at=['2025-01-01']*2,qty=['2','3'],line_id=['1','1']))
  assert parse_orders(d)[0].empty
+
+@pytest.mark.parametrize('confirmation', [float('nan'), pd.NA, 'False', 'True', 1, None])
+def test_arrival_requires_explicit_boolean_confirmation(confirmation):
+ s=stock(); s['arrival_confirmed']=confirmation
+ result=recommend(history(),s,{},'2025-04-01')
+ assert result['qty'] is None
+ assert 'ARRIVAL_UNCONFIRMED' in result['reason_codes']
+
+def test_integer_csv_parameters_are_normalized_without_mutating_input():
+ original=stock()
+ numeric=['on_hand','on_order','lead_days','pack_size','min_order']
+ uploaded={k:(str(v)+'.0' if k in numeric else v) for k,v in original.items()}
+ result=recommend(history(),uploaded,{},'2025-04-01')
+ assert result['qty']==recommend(history(),original,{},'2025-04-01')['qty']
+ assert uploaded['lead_days']=='3.0'
+ original['pack_size']=True
+ assert 'INVALID_PACK_SIZE' in recommend(history(),original,{},'2025-04-01')['reason_codes']
+
+def test_nat_order_date_is_reported_instead_of_crashing():
+ raw=pd.DataFrame([dict(order_id='001',sku='002',order_at='NaT',qty='2')])
+ clean,issues,summary=parse_orders(raw)
+ assert clean.empty and summary['error']==1
+ assert issues.iloc[0].reason_code=='INVALID_FIELD'
+
+def test_confirmed_coverage_before_first_sale_is_included():
+ from core.demand import build_daily
+ raw=pd.DataFrame([dict(order_id='001',sku='002',order_at='2025-01-03',qty='2')])
+ clean,_,_=parse_orders(raw)
+ daily=build_daily(clean,pd.date_range('2025-01-01','2025-01-04'))
+ assert daily.date.tolist()==list(pd.date_range('2025-01-01','2025-01-04'))
+ assert daily.sold_qty.tolist()==[0,0,2,0]
+ assert daily.coverage_status.eq('confirmed').all()
+
 def test_replay():
  cfg=dict(start='2025-04-01',end='2025-04-10',lead_days=3,initial_stock=2)
  t,m=run_replay(history(),cfg);a=t[t.policy=='adaptive'].reset_index(drop=True)
  assert a.iloc[0].shortage==3;assert a.iloc[0].ending_stock==0;assert a.iloc[3].arrived==a.iloc[0].order
  t2,m2=run_replay(history(),cfg);pd.testing.assert_frame_equal(m,m2)
+
+@pytest.mark.parametrize('overrides', [dict(lead_days=0),dict(initial_stock=-1),
+ dict(pack_size=1.5),dict(start='2025-04-11'),dict(end='NaT')])
+def test_replay_rejects_invalid_config(overrides):
+ cfg=dict(start='2025-04-01',end='2025-04-10',lead_days=3,initial_stock=2)
+ with pytest.raises(ValueError): run_replay(history(),cfg|overrides)
+
+@pytest.mark.parametrize('demand', [-1,float('inf')])
+def test_replay_rejects_invalid_demand(demand):
+ data=history();data['sold_qty']=data.sold_qty.astype(float);data.loc[90,'sold_qty']=demand
+ with pytest.raises(ValueError):
+  run_replay(data,dict(start='2025-04-01',end='2025-04-10',lead_days=3,initial_stock=2))
 def test_export(): assert b"'=1" in csv_bytes(pd.DataFrame({'sku':['=1']}))
 def test_ui():
  from streamlit.testing.v1 import AppTest

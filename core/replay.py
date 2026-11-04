@@ -1,6 +1,30 @@
 import pandas as pd
+import math
 from .policy import recommend
 def run_replay(daily,config,policies=('baseline','adaptive')):
+    config=dict(config)
+    if daily.empty or daily.sku.nunique()!=1 or daily.date.duplicated().any():
+        raise ValueError('每次回放须提供单一商品且日期不能重复')
+    if not policies or len(set(policies))!=len(policies) or any(p not in ('baseline','adaptive') for p in policies):
+        raise ValueError('请选择不重复的有效补货策略')
+    for key,minimum,default in [('initial_stock',0,None),('lead_days',1,None),('pack_size',1,1),('min_order',0,0)]:
+        try:
+            value=config.get(key,default)
+            if pd.api.types.is_bool(value): raise ValueError()
+            number=float(value)
+            if not math.isfinite(number) or not number.is_integer() or number<minimum: raise ValueError()
+            config[key]=int(number)
+        except (ValueError,TypeError,OverflowError):
+            raise ValueError(f'{key}须为不小于{minimum}的整数') from None
+    try:
+        start=pd.Timestamp(config['start']);end=pd.Timestamp(config['end'])
+        if pd.isna(start) or pd.isna(end) or start>end: raise ValueError()
+    except (KeyError,ValueError,TypeError):
+        raise ValueError('请选择有效的起止日期，结束日期不得早于开始日期') from None
+    demand=pd.to_numeric(daily.sold_qty,errors='coerce')
+    if (demand.dropna()<0).any() or not demand.dropna().map(math.isfinite).all():
+        raise ValueError('需求须为有限非负数')
+    daily=daily.assign(sold_qty=demand)
     rows=[]
     for policy in policies:
         hand=int(config['initial_stock']); queue=[]
