@@ -26,12 +26,13 @@ apply_theme()
 st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
 def navigate(target): st.session_state['navigation']=target
-page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
+page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
 usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],key='usage_mode',help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
 st.caption('当前模式：'+usage_mode+' · 真实订单不等于真实库存；回放结果始终是模拟。')
 st.title(page)
 HEADINGS={
+'采购与到货':('把补货建议落到采购与到货','记录人工确认、分批到货与每日库存风险。','采购执行'),
 '公平实验室':('在相同库存预算下检验策略','扫描参数、检查支配关系与成本敏感性，避免把多备货误认为算法优势。','实验验证'),
 '经营总览':('今天的经营，从这里开始','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
 '导入与质检':('先把销售记录整理清楚','导入、匹配、核验，确保每一条建议都有可靠输入。','数据准备'),
@@ -245,7 +246,10 @@ else:
     as_of=daily[daily.coverage_status=='confirmed'].date.max()+pd.Timedelta(days=1)
     if 'inventory' not in st.session_state:
         st.session_state.inventory=pd.DataFrame([dict(sku=s,as_of=str(as_of.date()),on_hand=10,on_order=0,lead_days=3,pack_size=6,min_order=0,arrival_confirmed=True,source='合成演示参数',parameter_kind='演示假设',verified=False) for s in daily.sku.unique()])
-    if page=='库存配置':
+    if page=='采购与到货':
+        from purchasing_ui import render
+        render(daily, st.session_state.inventory, as_of, usage_mode=='实际采购准备')
+    elif page=='库存配置':
         st.caption('02 / 库存快照必须与决策日期一致：'+str(as_of.date()))
         section('填写商品库存与采购约束','选择商品，修改下方字段并保存。保存后进入补货清单即可重新计算。商品编码不能编辑；库存快照日期请使用上方提示日期。')
         st.warning('初始库存是演示参数。实际使用请逐项核对现货、在途与供应商交期。')
