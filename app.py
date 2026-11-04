@@ -1,5 +1,14 @@
 from pathlib import Path
 import hashlib,json,io,zipfile
+from importlib import reload
+import results_ui
+import ui
+
+# Streamlit can rerun this entry point with modules cached from the previous deploy.
+if not hasattr(results_ui, 'replay_comparison'):
+    reload(ui)
+    reload(results_ui)
+
 from ui import table_view, date_range, apply_theme, show_chart
 from page_help import PAGE_HELP, render_page_help
 from results_ui import (
