@@ -67,19 +67,33 @@ def ai_budget_sidebar():
         st.warning('额度存储不可用，AI调用暂不可用。')
 def navigate(target): st.session_state['navigation']=target
 def page_name(name):
-    return '历史模拟对比' if name == '策略回放' else name
+    return {'策略回放':'历史模拟对比', '公平实验室':'公平对比实验'}.get(name, name)
+
+def cancel_actual_mode():
+    st.session_state.update(usage_mode='演示探索', actual_mode_confirmed=False)
 
 page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','模拟经营','使用指南','数据与说明'],key='navigation',format_func=page_name)
 if page!='模拟经营': st.session_state.simulation_running=False
-st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
-usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],key='usage_mode',help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
-st.caption('当前模式：'+usage_mode+' · 真实订单不等于真实库存；回放结果始终是模拟。')
+st.sidebar.caption('适用于单家门店。采购量按整件计算，建议每天核对库存和到货。')
+mode_choice = st.sidebar.radio(
+    '库存使用模式', ['演示探索', '实际采购准备'], key='usage_mode',
+    help='演示探索可使用假设库存。实际采购准备只为已核对来源的实际盘点库存给出数量。',
+    on_change=lambda: st.session_state.update(actual_mode_confirmed=False),
+)
+if mode_choice == '实际采购准备' and not st.session_state.get('actual_mode_confirmed'):
+    with st.sidebar.container(border=True):
+        st.markdown('**确认切换到实际采购准备**')
+        st.write('演示库存和未核实的商品会转为人工复核，建议数量暂留空。可在库存配置中填写实际盘点来源并确认。')
+        st.button('确认切换', on_click=lambda: st.session_state.update(actual_mode_confirmed=True), type='primary')
+        st.button('继续演示', on_click=cancel_actual_mode)
+usage_mode = '实际采购准备' if mode_choice == '实际采购准备' and st.session_state.get('actual_mode_confirmed') else '演示探索'
+st.caption('当前模式 · ' + usage_mode)
 st.title(page_name(page))
 HEADINGS={
 '模拟经营':('让历史交易逐日驱动经营演示','自动导入历史销量、模拟补货与到货，逐日查看库存流转。','历史模拟'),
 '采购与到货':('把补货建议落到采购与到货','记录人工确认、分批到货与每日库存风险。','采购执行'),
-'公平实验室':('在相同库存预算下检验策略','扫描参数、检查支配关系与成本敏感性，避免把多备货误认为算法优势。','实验验证'),
-'经营总览':('今天的经营，从这里开始','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
+'公平实验室':('在相同库存预算下检验策略','在接近的库存占用下比较满足率，再看成本假设改变时的结果。','实验验证'),
+'经营总览':('从销售记录到补货建议','先了解数据与库存准备情况，再处理补货任务。','经营概览'),
 '导入与质检':('先把销售记录整理清楚','导入、匹配、核验，确保每一条建议都有可靠输入。','数据准备'),
 '库存配置':('把真实库存和采购条件填准确','逐商品核对现货、在途与交期，为补货决策做好准备。','库存管理'),
 '补货清单':('先处理异常，再确认采购','检查人工复核事项，逐条核对建议依据，导出待确认清单。','采购决策'),
@@ -121,19 +135,56 @@ def section(title,description):
     st.subheader(title);st.write(description)
 
 def download(label,df,name): st.download_button(label,csv_bytes(df),name,'text/csv')
-def quick_demo():
-    raw=Path('data/demo/orders.csv').read_bytes()
-    clean,issues,summary=parse_orders(pd.read_csv(io.BytesIO(raw),dtype=str))
-    daily=build_daily(clean,pd.date_range('2010-01-01','2010-06-30'))
-    for key in ['inventory','replay_result','scenario_result','study']:
-        st.session_state.pop(key,None)
-    st.session_state.update(raw=raw,daily=daily,issues=issues,summary=summary,
-        data_hash=hashlib.sha256(raw).hexdigest(),product_names={},usage_mode='演示探索',navigation='补货清单')
+DEMO_RANGE = (pd.Timestamp('2010-01-01').date(), pd.Timestamp('2010-06-30').date())
+DEMO_SOURCE = '英国零售公开样本'
+
+def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source):
+    data_hash = hashlib.sha256(raw).hexdigest()
+    previous = st.session_state.get('daily')
+    if previous is None or st.session_state.get('data_hash') != data_hash or not previous.equals(daily):
+        for key in ('inventory', 'replay_result', 'scenario_result', 'study', 'simulation',
+                    'purchases', 'purchase_workspace', 'stock_movements', 'receipt_notice',
+                    'ai_purchase_draft', 'ai_explanation'):
+            st.session_state.pop(key, None)
+    names = {sku: f'样本商品 {i:02d}' for i, sku in enumerate(sorted(daily.sku.unique()), 1)} if is_demo else {}
+    if 'description' in clean:
+        named = clean[clean.description.astype(str).str.strip().ne('')].drop_duplicates('sku')
+        names.update(named.set_index('sku').description.to_dict())
+    st.session_state.update(raw=raw, daily=daily, issues=issues, summary=summary, data_hash=data_hash,
+                            product_names=names, sales_source=source, coverage=coverage, is_demo=is_demo)
+
+def quick_demo(target='补货清单'):
+    raw = Path('data/demo/orders.csv').read_bytes()
+    clean, issues, summary = parse_orders(pd.read_csv(io.BytesIO(raw), dtype=str))
+    daily = build_daily(clean, pd.date_range(*DEMO_RANGE))
+    save_sales(raw, clean, issues, summary, daily, DEMO_RANGE, True, DEMO_SOURCE)
+    cancel_actual_mode()
+    navigate(target)
+
+def require_sales():
+    if 'daily' in st.session_state and not st.session_state.daily.empty:
+        return
+    has_data = 'daily' in st.session_state
+    st.info('核验结果没有可用商品，请检查问题行或重新导入。' if has_data else
+            '这个功能需要已核验的销售记录。可导入自己的 CSV，或加载公开样本体验。')
+    left, right = st.columns(2)
+    left.button('前往导入与质检', on_click=navigate, args=('导入与质检',), type='primary')
+    if not has_data:
+        right.button('加载示例数据', on_click=quick_demo, args=(page,))
+    st.stop()
+
+def product_label(sku, names=st.session_state.get('product_names', {})):
+    name = names.get(sku)
+    return f'{name} · {sku}' if name else str(sku)
 
 if page=='经营总览':
-    st.write('导入销售和库存，查看该补哪些商品、补多少，以及计算原因。')
-    st.button('用示例立即体验',type='primary',on_click=quick_demo,disabled='daily' in st.session_state)
-    st.caption('示例使用公开交易与假设库存，自动进入演示模式；已有数据时请继续当前任务。')
+    if 'daily' not in st.session_state:
+        with st.container(border=True):
+            st.subheader('第一次使用？从这里开始')
+            first, second = st.columns(2)
+            first.button('用示例立即体验', type='primary', on_click=quick_demo, help='加载公开交易和假设库存，直接进入补货清单。')
+            second.button('导入自己的销售记录', on_click=navigate, args=('导入与质检',))
+            st.caption('销售数据 → 核对库存 → 查看建议 → 登记采购或对比策略')
     ready='daily' in st.session_state and not st.session_state.daily.empty
     cols=st.columns(4)
     cols[0].metric('管理商品',st.session_state.daily.sku.nunique() if ready else '—',help='来自当前已核验数据')
@@ -169,57 +220,106 @@ if page=='经营总览':
         show_chart(px.line(sales, x='日期', y='销量（件）', title='已确认区间的每日销量'),
                    '合计所有商品的已完成销售。已确认且无销售的日期记为 0，未覆盖日期在图上留空。', height=300)
 elif page=='导入与质检':
-    st.info('第一次体验：点击下方「一键加载 UCI 真实交易样本」，保持日期与字段默认值，勾选覆盖确认，再点击「核验并使用此数据」。')
-    section('第一步 · 选择销售数据','上传从收银系统或记账表导出的 CSV 文件，或使用UCI 官方数据中筛选的 20 个商品真实交易。该数据来自英国在线零售商，库存仍为演示参数。')
-    with st.expander('我的表格需要包含哪些字段？'):
-        st.markdown('**必填：**订单编号、商品编码、销售日期、销售数量。商品编码是每种商品的唯一编号，例如 00001。数量必须是整数。\n\n**选填：**订单行编号、单价、商品描述、订单状态。原表列名可以不同，下一步可手动匹配。\n\n取消订单和退货会单独统计；只有已完成的正数量销售进入需求计算。')
-    upload=st.file_uploader('上传 CSV（订单号和商品编码 将保留前导零）',type='csv')
-    demo=st.button('一键加载 UCI 真实交易样本',type='primary')
-    st.caption('来源：UCI Online Retail II · 陈大庆 · CC BY 4.0。订单来自真实公开交易；默认库存不是真实库存。')
-    if demo or upload:
-        raw=Path('data/demo/orders.csv').read_bytes() if demo else upload.getvalue()
-        if st.session_state.get('raw')!=raw:
-            for dependent in ['daily','inventory','issues','summary','replay_result','scenario_result','study','data_hash','product_names']:
-                st.session_state.pop(dependent,None)
-        st.session_state['raw']=raw
-    if 'raw' in st.session_state:
-        try: df=pd.read_csv(io.BytesIO(st.session_state.raw),dtype=str,keep_default_na=False)
-        except Exception as e: st.error(str(e));st.stop()
-        section('第二步 · 检查字段与日期','以下为前 10 条原始记录。请将表格中的四个必填列逐一对应；同一列不能重复选择。')
-        table_view(chinese(df.head(10)),hide_index=True)
-        from ai_ui import headers_ui
-        headers_ui(list(df.columns))
-        mapping={}
-        for key in ['order_id','sku','order_at','qty']:
-            selected=st.selectbox('对应字段：'+({'qty':'销售数量（件）'}|LABELS).get(key,key),list(df.columns),index=list(df.columns).index(key) if key in df else 0,key='map_'+key,format_func=lambda c: LABELS.get(c,c));mapping[selected]=key
-        fmt=st.selectbox('日期格式',['%Y-%m-%d','%d/%m/%Y','%m/%d/%Y','%Y-%m-%d %H:%M:%S'],format_func=lambda f:{'%Y-%m-%d':'年-月-日，例如2025-01-31','%d/%m/%Y':'日/月/年，例如31/01/2025','%m/%d/%Y':'月/日/年，例如01/31/2025','%Y-%m-%d %H:%M:%S':'年月日与时分秒，例如2025-01-31 09:30:00'}[f])
-        section('第三步 · 确认完整覆盖区间','请选择每天均完整导出的营业日期。区间内没有订单的日期会按零销量处理；请勿将未导出的日期当作零销量。UCI 样本覆盖 2010-01-01 至 2010-06-30；把完整交易导出区间视为连续覆盖是回放假设，不等同于已验证营业日。')
-        coverage=date_range('已完整覆盖的营业日期区间',value=(pd.Timestamp('2010-01-01').date(),pd.Timestamp('2010-06-30').date()))
-        confirmed=st.checkbox('我确认该区间每天完整导出；无订单日期可视为零销量')
-        if st.button('核验并使用此数据',disabled=not confirmed):
+    ready = 'summary' in st.session_state
+    if ready:
+        total = sum(value for key, value in st.session_state.summary.items() if key != 'suspicious')
+        coverage = st.session_state.get('coverage')
+        span = f' · 覆盖 {coverage[0]} 至 {coverage[1]}' if coverage else ''
+        st.success(f"当前已核验 · {st.session_state.get('sales_source', '本会话销售数据')} · {total:,} 条{span}")
+    if st.session_state.pop('sales_import_finished', False):
+        st.session_state.open_sales_import = False
+    if not ready or st.toggle('重新导入', key='open_sales_import'):
+        if ready:
+            st.caption('更换数据会开启新的库存、采购台账和实验记录。需要保留时请先下载备份。')
+        section('第一步 · 选择销售数据','上传销售 CSV，或用加州大学欧文分校（UCI）公开的英国零售交易样本。')
+        with st.expander('我的表格需要包含哪些字段？'):
+            st.markdown('**必填**　订单编号、商品编码、销售日期、销售数量。**选填**　商品名称、订单行编号、单价和订单状态。')
+        upload = st.file_uploader('上传销售 CSV', type='csv', help='保留订单号、商品编码的前导零。')
+        demo = st.button('一键加载 UCI 真实交易样本', type='primary')
+        candidate = st.session_state.get('sales_candidate')
+        if demo:
+            candidate = (Path('data/demo/orders.csv').read_bytes(), DEMO_SOURCE, True)
+        elif upload:
+            uploaded = (upload.getvalue(), upload.name, False)
+            if st.session_state.get('last_sales_upload') != uploaded:
+                candidate = uploaded
+                st.session_state.last_sales_upload = uploaded
+        if candidate != st.session_state.get('sales_candidate'):
+            for key in ('map_order_id','map_sku','map_order_at','map_qty','sales_coverage_confirmed',
+                        '已完整覆盖的营业日期区间start','已完整覆盖的营业日期区间end'):
+                st.session_state.pop(key, None)
+            st.session_state.sales_candidate = candidate
+        st.caption('样本来源 · UCI Online Retail II / 陈大庆 / CC BY 4.0。默认库存为演示假设。')
+        if candidate is not None:
+            raw, source, is_demo = candidate
+            st.caption('待核验 · ' + source)
             try:
-                if len(mapping)!=4 or len(coverage)!=2: raise ValueError('请使用四个不同字段并选定完整日期区间')
-                clean,issues,summary=parse_orders(df,mapping,fmt)
-                daily=build_daily(clean,pd.date_range(*coverage))
-                st.session_state.update(daily=daily,issues=issues,summary=summary,data_hash=hashlib.sha256(st.session_state.raw).hexdigest())
-                st.session_state['product_names']=clean.drop_duplicates('sku').set_index('sku')['description'].to_dict() if 'description' in clean else {}
-                for key in ['inventory','replay_result','scenario_result','study']: st.session_state.pop(key,None)
-            except Exception as e: st.error(str(e))
-        if 'summary' in st.session_state:
-            section('第四步 · 查看核验结果','已自动处理的记录无需修改；疑似重复仍计入销量，请复核。错误行已隔离，修正后重新导入才能计入。')
-            names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
-            quality_charts(st.session_state.summary, names)
-            if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
+                df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False)
+            except (ValueError, UnicodeError) as error:
+                st.error(f'无法读取 CSV。请检查文件编码和格式。{error}')
             else:
-                issues=st.session_state.issues
-                groups=[('必须修正', ['INVALID_FIELD','CONFLICTING_LINE_ID']),('需要复核',['SUSPECT_DUPLICATE']),('已自动处理',['CANCELLED','RETURN','NOT_COMPLETED','NON_PRODUCT','DUPLICATE_LINE'])]
-                for title,codes in groups:
-                    subset=issues[issues.reason_code.isin(codes)]
-                    with st.expander(f'{title} · {len(subset)} 条',expanded=title=='必须修正' and len(subset)>0):
-                        if len(subset): table_view(chinese(subset),hide_index=True)
-                st.info('可继续配置库存；疑似重复可能影响建议数量，实际采购前请完成复核。')
-            download('下载问题行',chinese(st.session_state.issues),'issues.csv')
-            st.button('下一步：核对库存 →',on_click=navigate,args=('库存配置',))
+                section('第二步 · 检查字段与日期','核对预览，再对应四个必填列。商品名称可选，填写后会随商品编码显示。')
+                table_view(chinese(df.head(10)), hide_index=True)
+                from ai_ui import headers_ui
+                headers_ui(list(df.columns))
+                mapping = {}
+                columns = list(df.columns)
+                for field in ('order_id','sku','order_at','qty'):
+                    selected = st.selectbox('对应字段 · ' + LABELS[field], columns,
+                                            index=columns.index(field) if field in columns else 0, key='map_' + field,
+                                            format_func=lambda col: LABELS.get(col, col))
+                    mapping[selected] = field
+                remaining = [col for col in columns if col not in mapping]
+                preferred = next((col for col in ('description', '商品名称', '商品描述') if col in remaining), None)
+                name_column = st.selectbox('商品名称列（选填）', [None, *remaining],
+                                           index=remaining.index(preferred) + 1 if preferred else 0,
+                                           format_func=lambda col: '暂不填写' if col is None else col)
+                formats = {'%Y-%m-%d':'年-月-日，例如 2025-01-31', '%d/%m/%Y':'日/月/年，例如 31/01/2025',
+                           '%m/%d/%Y':'月/日/年，例如 01/31/2025', '%Y-%m-%d %H:%M:%S':'年-月-日 时:分:秒，例如 2025-01-31 09:30:00'}
+                fmt = st.selectbox('日期格式', list(formats), format_func=formats.get)
+                date_col = next((col for col, field in mapping.items() if field == 'order_at'), None)
+                dates = pd.to_datetime(df[date_col], format=fmt, errors='coerce').dropna() if date_col else pd.Series(dtype='datetime64[ns]')
+                today = pd.Timestamp.today().date()
+                defaults = DEMO_RANGE if is_demo else (dates.min().date(), dates.max().date()) if not dates.empty else (today, today)
+                section('第三步 · 确认销售记录覆盖日期','只选已经完整导出的日期。所选范围内，没记录的日期按零销量处理。')
+                coverage = date_range('已完整覆盖的营业日期区间', value=defaults)
+                confirmed = st.checkbox('这些日期都已完整导出', key='sales_coverage_confirmed',
+                                        help='如果有一天漏导出，请补齐文件或缩短范围，以免被算成零销量。')
+                if st.button('核验并使用此数据', disabled=not confirmed):
+                    try:
+                        if len(mapping) != 4:
+                            raise ValueError('请为四个必填字段选择不同的列。')
+                        source_rows = df
+                        if name_column != 'description' and 'description' in df and 'description' not in mapping:
+                            source_rows = df.drop(columns='description')
+                        if name_column is not None:
+                            mapping[name_column] = 'description'
+                        if source_rows.rename(columns=mapping).columns.duplicated().any():
+                            raise ValueError('所选字段与文件中的标准列名冲突，请调整列名或字段匹配。')
+                        clean, issues, summary = parse_orders(source_rows, mapping, fmt)
+                        daily = build_daily(clean, pd.date_range(*coverage))
+                        if daily.empty and ready:
+                            raise ValueError('新文件没有可用的销售记录，已保留当前数据。')
+                        save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source)
+                        st.session_state.sales_import_finished = True
+                        st.rerun()
+                    except (ValueError, TypeError, KeyError) as error:
+                        st.error(str(error))
+    if 'summary' in st.session_state:
+        section('第四步 · 查看核验结果','已自动处理的记录无需修改；疑似重复仍计入销量，请复核。错误行已隔离，修正后重新导入才能计入。')
+        names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
+        quality_charts(st.session_state.summary, names)
+        if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
+        else:
+            issues=st.session_state.issues
+            groups=[('必须修正', ['INVALID_FIELD','CONFLICTING_LINE_ID']),('需要复核',['SUSPECT_DUPLICATE']),('已自动处理',['CANCELLED','RETURN','NOT_COMPLETED','NON_PRODUCT','DUPLICATE_LINE'])]
+            for title,codes in groups:
+                subset=issues[issues.reason_code.isin(codes)]
+                with st.expander(f'{title} · {len(subset)} 条',expanded=title=='必须修正' and len(subset)>0):
+                    if len(subset): table_view(chinese(subset),hide_index=True)
+            st.info('可继续配置库存；疑似重复可能影响建议数量，实际采购前请完成复核。')
+        download('下载问题行',chinese(st.session_state.issues),'issues.csv')
+        st.button('下一步：核对库存 →',on_click=navigate,args=('库存配置',))
 elif page=='使用指南':
     st.success('建议先用内置样本体验一遍，再替换为自己的订单和库存。整个体验约需 5 分钟。')
     tabs=st.tabs(['快速上手','字段字典','如何理解结果','常见问题','全部功能与 AI'])
@@ -268,12 +368,9 @@ elif page=='使用指南':
 """)
 elif page=='公平实验室':
     from core.study import run_study
-    if 'daily' not in st.session_state: st.info('请先导入并核验数据。');st.stop()
+    require_sales()
     st.warning('探索性测试集分析：扫描结果与事后最优比例不能直接当作可部署策略，也不证明任何算法普遍更优。')
     daily=st.session_state.daily
-    if daily.empty:
-        st.info('请先导入含有有效销售记录的数据，再运行实验。')
-        st.stop()
     selected=st.multiselect('参与实验的商品',list(daily.sku.unique()),default=list(daily.sku.unique())[:3],placeholder='请选择商品')
     dates=date_range('实验测试日期',((daily.date.max()-pd.Timedelta(days=13)).date(),daily.date.max().date()))
     c1,c2,c3=st.columns(3)
@@ -333,9 +430,8 @@ elif page=='数据与说明':
     st.markdown('规则版本 **1.0.0**。保护期 = 交期 + 1；28 天均值；最多 60 个历史误差窗口的 最近秩法 90% 分位数；至少 20 个误差窗口。')
     st.warning('历史成交量只是需求代理。回放为丢失销售模拟，不能推断真实商户改善幅度。经营需求尚待商户验证。')
 else:
-    if 'daily' not in st.session_state: st.info('请先在导入与质检页面加载并确认数据。');st.stop()
+    require_sales()
     daily=st.session_state.daily
-    if daily.empty: st.warning('没有可用商品');st.stop()
     as_of=daily[daily.coverage_status=='confirmed'].date.max()+pd.Timedelta(days=1)
     if 'inventory' not in st.session_state and page!='模拟经营':
         st.session_state.inventory=pd.DataFrame([dict(sku=s,as_of=str(as_of.date()),on_hand=10,on_order=0,lead_days=3,pack_size=6,min_order=0,arrival_confirmed=True,source='合成演示参数',parameter_kind='演示假设',verified=False) for s in daily.sku.unique()])
@@ -346,12 +442,14 @@ else:
         from purchasing_ui import render
         render(daily, st.session_state.inventory, as_of, usage_mode=='实际采购准备')
     elif page=='库存配置':
-        st.caption('02 / 库存快照必须与决策日期一致：'+str(as_of.date()))
+        st.caption(f'库存快照日期应为 {as_of.date()}（销售覆盖结束后的第一天）。'
+                   + ('当前使用 2010 年的公开样本。' if st.session_state.get('is_demo') else ''))
         section('填写商品库存与采购约束','选择商品，修改下方字段并保存。保存后进入补货清单即可重新计算。商品编码不能编辑；库存快照日期请使用上方提示日期。')
-        st.warning('初始库存是演示参数。实际使用请逐项核对现货、在途与供应商交期。')
-        if usage_mode=='演示探索':
-            st.info('演示库存已准备好，可直接查看建议，也可修改现货观察结果变化。')
-            st.button('使用演示库存继续 →',on_click=navigate,args=('补货清单',),type='primary')
+        if usage_mode == '实际采购准备':
+            st.info('填写现货和在途，将参数性质设为「实际盘点」，填入来源，勾选核实并保存。')
+        else:
+            st.button('查看当前库存的补货建议 →', on_click=navigate, args=('补货清单',), type='primary',
+                      help='打开补货清单，使用当前已保存的库存。')
         with st.expander('填写说明与批量导入步骤',expanded=False):
             st.markdown('**现货/在途：**均为非负整数；在途只填写预计按期到达的采购。**交期：**至少1天。**每箱件数：**至少1件。**起订量：**没有限制时填0。\n\n批量修改：下载库存模板 → 保留表头和商品编码 → 修改数量和日期 → 上传 → 点击应用。表格中的到货确认填写“是”或“否”。')
         template=st.session_state.inventory
@@ -376,7 +474,7 @@ else:
                     st.session_state.inventory.loc[mask,'pack_size']=bulk_pack
                     st.session_state.inventory.loc[mask,'verified']=False
                     st.success(f'已更新 {int(mask.sum())} 个商品，请重新核实参数。')
-        chosen=st.selectbox('选择要修改的商品',st.session_state.inventory.sku.tolist())
+        chosen=st.selectbox('选择要修改的商品',st.session_state.inventory.sku.tolist(),format_func=product_label)
         idx=st.session_state.inventory.index[st.session_state.inventory.sku==chosen][0]
         row=st.session_state.inventory.loc[idx].to_dict()
         with st.form('stock_'+chosen):
@@ -400,13 +498,22 @@ else:
     elif page=='补货清单':
         section('本次补货建议','建议下单：存在库存缺口；暂不补货：当前库存位置已达到目标；人工复核：信息不足，暂不给出数量。')
         st.caption('每次进入本页均按当前库存重新计算。请先核对参数来源，再导出清单。')
-        st.warning('演示模式的建议不能直接用于真实采购。实际采购准备模式也须由经营者审核，未验证经营成效。')
+        if usage_mode == '演示探索' and st.session_state.get('is_demo'):
+            st.caption('示例默认每种商品只有 10 件现货。热销商品的建议件数可能较大。真实采购请先核对现货和交期。')
         decisions=[recommend(g,st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, {'require_actual':usage_mode=='实际采购准备'},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
         out=pd.DataFrame(decisions)
+        unverified = sum('UNVERIFIED_PARAMETERS' in r['reason_codes'] or 'MISSING_STOCK' in r['reason_codes']
+                         for r in decisions)
+        if usage_mode == '实际采购准备' and unverified:
+            scope = '全部' if unverified == len(out) else '其中'
+            st.warning(f'实际采购准备模式下，{scope} {unverified} 个商品缺少已核实的实际库存，建议数量暂留空。'
+                       '请在库存配置选择「实际盘点」、填写来源并勾选核实后保存。')
+            st.button('去核实库存参数', on_click=navigate, args=('库存配置',))
+        st.caption('保护期是采购提前期加 1 天。库存位置是现货与可按期到货的在途之和。')
         out=out.assign(_priority=out.status.map({'人工复核':0,'建议下单':1,'暂不补货':2})).sort_values('_priority').drop(columns='_priority')
         cols=st.columns(3)
         for col,status in zip(cols,['建议下单','暂不补货','人工复核']): col.metric(status,int((out.status==status).sum()))
-        out['商品名称']=out.sku.map(st.session_state.get('product_names',{})).astype(object).fillna('未提供名称')
+        out['商品名称']=out.sku.map(st.session_state.get('product_names',{})).astype(object).fillna('—')
         stocks=st.session_state.inventory.set_index('sku')
         out['现货（件）']=out.sku.map(stocks.on_hand)
         out['建议箱数']=[round(r.qty/float(stocks.loc[r.sku,'pack_size']),2) if pd.notna(r.qty) and r.sku in stocks.index and float(stocks.loc[r.sku,'pack_size'])>0 else None for r in out.itertuples()]
@@ -431,7 +538,7 @@ else:
                 figure.update_yaxes(type='category', autorange='reversed', title=None, showgrid=False)
                 show_chart(figure, '悬停可看商品名称和件数。下方明细保留筛选范围内的全部商品。', height=390)
         table_view(chinese(filtered[['sku','商品名称','status','qty','现货（件）','建议箱数','预计库存覆盖（天）']]),hide_index=True,width='stretch')
-        if (out.status=='人工复核').any():
+        if (out.status=='人工复核').any() and not (usage_mode == '实际采购准备' and unverified):
             st.warning('请优先处理人工复核商品，数量为空时不能按零采购理解。')
             st.button('返回库存配置处理异常',on_click=navigate,args=('库存配置',))
         from ai_ui import explanation_ui
@@ -443,7 +550,7 @@ else:
                     for code in r.get('reason_codes',[]): st.warning(reason_text(code))
                 else:
                     st.write(f"建议 {int(r['qty']):,} 件；近28日日均销量约 {r['mean']:,.1f} 件，保护期 {r['protection_days']} 天。")
-                    st.write(f"目标库存 {r['target']} 件 − 库存位置 {r['inventory_position']} 件，再按起订量和包装倍数向上调整，得到建议数量。")
+                    st.write(f"目标库存 {r['target']} 件 − 库存位置 {r['inventory_position']} 件，再按起订量和每箱件数向上调整，得到建议数量。")
                 evidence=[{'说明字段':LABELS.get(k,k),'本次取值':(f'{v:,.2f}' if isinstance(v,float) and pd.notna(v) else str(v))} for k,v in r.items() if k!='reason_codes']
                 table_view(pd.DataFrame(evidence))
         download('导出待人工确认清单',chinese(filtered),'replenishment.csv')
@@ -456,7 +563,7 @@ else:
         ranked=recent.groupby('sku').sold_qty.sum().sort_values(ascending=False).index.tolist()
         sku=st.selectbox('商品',ranked);g=daily[daily.sku==sku]
         dates=date_range('测试日期',value=((g.date.max()-pd.Timedelta(days=29)).date(),g.date.max().date()))
-        lead=st.selectbox('采购提前期',[2,4,7]);initial=st.number_input('双方初始库存',0,100000,20);pack=st.number_input('包装倍数',1,10000,1)
+        lead=st.selectbox('采购提前期',[2,4,7]);initial=st.number_input('双方初始库存',0,100000,20);pack=st.number_input('每箱件数',1,10000,1)
         selected_days=g[g.date.between(pd.Timestamp(dates[0]),pd.Timestamp(dates[1]))]
         st.caption(f'本期历史销量：{selected_days.sold_qty.sum():,.0f} 件；已确认覆盖：{int((selected_days.coverage_status=="confirmed").sum())} 天。默认按最近30天销量排序，未按策略优劣挑选。')
         if selected_days.sold_qty.sum()==0: st.warning('本期无需求，无法比较策略效果。请选择有销量的商品或日期；零需求回放仍可运行。')
@@ -491,7 +598,7 @@ else:
         st.caption('保持商品和测试期相同，组合不同初始库存、交期和箱规。用并排柱对比同组内的满足率和平均库存。最多 8 组。')
         stocks=st.multiselect('比较的初始库存（件）',[0,20,100,300],default=[20,100])
         leads=st.multiselect('比较的交期（天）',[2,4,7],default=[2,7])
-        packs=st.multiselect('比较的箱规（件）',[1,6,12],default=[1,6])
+        packs=st.multiselect('比较的每箱件数',[1,6,12],default=[1,6])
         combination_count = len(stocks) * len(leads) * len(packs)
         st.caption(f'当前选择形成 {combination_count} 组条件。')
         scenario_cfg=dict(start=str(dates[0]),end=str(dates[1])) if len(dates)==2 else None
@@ -528,4 +635,3 @@ else:
                 z.writestr('comparisons.csv',csv_bytes(comparisons))
                 z.writestr('manifest.json',json.dumps(dict(**scfg,evidence_type='模拟敏感性实验，不能替代真实商户验证',lost_sales='原始订单未提供真实缺货失销量'),ensure_ascii=False,indent=2))
             st.download_button('导出全部条件与实验说明',package.getvalue(),'sensitivity-experiment.zip')
-
