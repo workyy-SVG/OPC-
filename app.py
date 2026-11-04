@@ -1,6 +1,8 @@
 from pathlib import Path
 import hashlib,json,io,zipfile
-from ui import table_view, date_range, apply_theme
+from ui import table_view, date_range, apply_theme, show_chart
+from page_help import PAGE_HELP, render_page_help
+from results_ui import POLICIES, COLORS, guide_example, quality_charts, replay_reading, scenario_charts, study_charts
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -52,12 +54,15 @@ def ai_budget_sidebar():
     except Exception:
         st.warning('额度存储不可用，AI调用暂不可用。')
 def navigate(target): st.session_state['navigation']=target
-page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','模拟经营','使用指南','数据与说明'],key='navigation',format_func=lambda x: '历史模拟对比' if x=='策略回放' else x)
+def page_name(name):
+    return '历史模拟对比' if name == '策略回放' else name
+
+page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','模拟经营','使用指南','数据与说明'],key='navigation',format_func=page_name)
 if page!='模拟经营': st.session_state.simulation_running=False
 st.sidebar.info('单门店 · 整数件 · 每日复核\n\n建议需人工确认后采购')
 usage_mode=st.sidebar.radio('参数使用模式',['演示探索','实际采购准备'],key='usage_mode',help='实际采购准备仅对已声明实际盘点、填写来源并确认的参数给出数量。声明由用户负责，不等于外部审计。')
 st.caption('当前模式：'+usage_mode+' · 真实订单不等于真实库存；回放结果始终是模拟。')
-st.title(page)
+st.title(page_name(page))
 HEADINGS={
 '模拟经营':('让历史交易逐日驱动经营演示','自动导入历史销量、模拟补货与到货，逐日查看库存流转。','历史模拟'),
 '采购与到货':('把补货建议落到采购与到货','记录人工确认、分批到货与每日库存风险。','采购执行'),
@@ -72,12 +77,14 @@ HEADINGS={
 headline,subtitle,tag=HEADINGS[page]
 st.markdown(f'<div class="workspace-banner"><span class="banner-tag">小店补货助手 / {tag}</span><h2>{headline}</h2><p>{subtitle}</p><div class="banner-flow">数据准备　／　库存管理　／　采购决策　／　经营分析</div></div>',unsafe_allow_html=True)
 
+render_page_help(page)
+
 with st.sidebar:
     st.divider()
     st.subheader('当前进度')
     st.write('✅ 已完成数据核验' if 'daily' in st.session_state else '① 等待导入销售数据')
     st.write('✅ 已建立库存配置' if 'inventory' in st.session_state else '② 等待填写库存')
-    st.caption('首次使用？打开「使用指南」，按步骤体验完整流程。')
+    st.caption('各功能页顶部都有用途和衔接说明。使用指南提供路线图和互动算例。')
     with st.container(key='ai_quota_panel'):
         ai_budget_sidebar()
 LABELS={'order_id':'订单编号','sku':'商品编码','order_at':'销售日期','qty':'数量（件）','line_id':'订单行编号','status':'处理状态','on_hand':'现货数量（件）','on_order':'在途数量（件）','as_of':'库存快照日期','lead_days':'采购提前期（天）','pack_size':'每箱件数','min_order':'最小起订量（件）','arrival_confirmed':'确认在途按期到货','source':'参数来源','row_no':'原文件行号','reason_code':'问题类型','hint':'修正建议','policy':'补货策略','date':'日期','demand':'需求代理（件）','arrived':'当日到货（件）','order':'当日下单（件）','ending_stock':'期末现货（件）','shortage':'未满足需求（件）','review':'是否人工复核','fill_rate':'件数满足率','mean_stock':'平均期末库存（件）','stockout_rate':'缺货天数占比','review_rate':'人工复核率','orders':'下单次数','final_pipeline':'期末在途（件）','common_eligible_rate':'双方可自动建议日期占比','inventory_position':'库存位置（件）','forecast_lead':'交期内预测需求（件）','buffer':'误差缓冲（件）','target':'目标库存（件）','mean':'近28日日均销量','protection_days':'保护期（天）','window_start':'历史窗口起始日','window_end':'历史窗口结束日','sample_count':'有效历史天数','error_samples':'误差窗口数量','rule_version':'规则版本','run_id':'运行编号','reason_codes':'复核原因'}
@@ -129,7 +136,7 @@ if page=='经营总览':
             with st.container(border=True):
                 st.markdown(f'**{number}　{title}**　'+('· 已有数据' if done else '· 待处理'))
                 st.caption(body)
-                st.button('打开'+target,key='home_'+target,on_click=navigate,args=(target,),disabled=target not in ['导入与质检'] and not ready)
+                st.button('打开'+page_name(target),key='home_'+target,on_click=navigate,args=(target,),disabled=target not in ['导入与质检'] and not ready)
     with right:
         with st.container(border=True):
             st.subheader('建议下一步')
@@ -144,6 +151,11 @@ if page=='经营总览':
                 st.caption('当前数据指纹：'+st.session_state.data_hash[:12])
             else: st.info('尚未导入数据；可先使用内置 UCI 样本体验。')
         st.button('查看五分钟使用指南',on_click=navigate,args=('使用指南',))
+    if ready:
+        sales = st.session_state.daily.groupby('date', as_index=False).sold_qty.sum(min_count=1)
+        sales = sales.rename(columns={'date':'日期','sold_qty':'销量（件）'})
+        show_chart(px.line(sales, x='日期', y='销量（件）', title='已确认区间的每日销量'),
+                   '合计所有商品的已完成销售。已确认且无销售的日期记为 0，未覆盖日期在图上留空。', height=300)
 elif page=='导入与质检':
     st.info('第一次体验：点击下方「一键加载 UCI 真实交易样本」，保持日期与字段默认值，勾选覆盖确认，再点击「核验并使用此数据」。')
     section('第一步 · 选择销售数据','上传从收银系统或记账表导出的 CSV 文件，或使用UCI 官方数据中筛选的 20 个商品真实交易。该数据来自英国在线零售商，库存仍为演示参数。')
@@ -186,10 +198,16 @@ elif page=='导入与质检':
             names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
             cols=st.columns(4)
             for i,(k,v) in enumerate(st.session_state.summary.items()): cols[i%4].metric(names[k],v)
+            quality_charts(st.session_state.summary, names)
             if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
             else:
                 issues=st.session_state.issues
                 groups=[('必须修正', ['INVALID_FIELD','CONFLICTING_LINE_ID']),('需要复核',['SUSPECT_DUPLICATE']),('已自动处理',['CANCELLED','RETURN','NOT_COMPLETED','NON_PRODUCT','DUPLICATE_LINE'])]
+                issue_counts = issues.reason_code.value_counts().rename_axis('问题类型').reset_index(name='记录数')
+                issue_counts['问题类型'] = issue_counts['问题类型'].map(reason_text)
+                issue_chart = px.bar(issue_counts, x='记录数', y='问题类型', orientation='h', title='质检问题分布')
+                issue_chart.update_yaxes(autorange='reversed', title=None)
+                show_chart(issue_chart, '每条柱显示该类型的报告次数。一个订单行可能有多项问题。')
                 for title,codes in groups:
                     subset=issues[issues.reason_code.isin(codes)]
                     with st.expander(f'{title} · {len(subset)} 条',expanded=title=='必须修正' and len(subset)>0):
@@ -199,31 +217,58 @@ elif page=='导入与质检':
             st.button('下一步：核对库存 →',on_click=navigate,args=('库存配置',))
 elif page=='使用指南':
     st.success('建议先用内置样本体验一遍，再替换为自己的订单和库存。整个体验约需 5 分钟。')
-    tabs=st.tabs(['快速上手','字段字典','如何理解结果','常见问题'])
+    tabs=st.tabs(['快速上手','字段字典','如何理解结果','常见问题','全部功能与 AI'])
     with tabs[0]:
-        for title,body in [
-            ('1 · 导入与质检','点击「一键加载 UCI 真实交易样本」。保持四项字段映射、日期格式及日期区间默认值，勾选完整覆盖确认，点击「核验并使用此数据」。查看有效销售与问题记录。'),
-            ('2 · 库存配置','左侧进入库存配置。选择商品后填写中文表单：现货填当前可卖数量，在途填已下单未到货数量，交期填下单到到货的天数。默认数字都是演示值，真实使用时必须替换。'),
-            ('3 · 补货清单','查看三类结果：建议下单、暂不补货、人工复核。展开某商品的计算依据，检查目标库存、现货和在途，然后下载待人工确认的清单。'),
-            ('4 · 策略回放','选择一个商品，保持默认测试日期，选择交期并填写初始库存。点击运行，比较两种策略的满足率与库存占用。下载实验 ZIP 可保留逐日记录和配置。')]:
-            with st.container(border=True): section(title,body)
-        st.info('演示验证：先记住某商品建议数量，再到库存配置增加现货，返回清单观察数量变化。取消「确认在途按期到货」，该商品会转为人工复核。')
+        st.subheader('从销售数据到采购记录')
+        route = [('导入与质检', '核验销售记录'), ('库存配置', '提供库存和交期'),
+                 ('补货清单', '解释建议件数'), ('采购与到货', '登记采购和入库')]
+        for index, (target, outcome) in enumerate(route, 1):
+            with st.container(border=True):
+                label, description, action = st.columns([1.35, 1.2, 1])
+                label.markdown(f'**{index:02d}　{target}**')
+                description.write(outcome)
+                action.button('打开页面', key='guide_route_' + target, on_click=navigate, args=(target,))
+        st.caption('收货更新现货后，补货清单会按当前库存重新计算。')
+        st.markdown('**想看规则怎样运作？**　模拟经营展示单条规则的逐日变化 → 历史模拟对比查看两条规则的取舍 → 公平实验室检验等库存和不同成本假设。')
+        with st.expander('按示例完成第一次体验'):
+            for title,body in [
+                ('1 · 导入与质检','点击「一键加载 UCI 真实交易样本」。保持四项字段映射、日期格式及日期区间默认值，勾选完整覆盖确认，点击「核验并使用此数据」。查看有效销售与问题记录。'),
+                ('2 · 库存配置','左侧进入库存配置。选择商品后填写中文表单：现货填当前可卖数量，在途填已下单未到货数量，交期填下单到到货的天数。默认数字都是演示值，真实使用时必须替换。'),
+                ('3 · 补货清单','查看三类结果：建议下单、暂不补货、人工复核。展开某商品的计算依据，检查目标库存、现货和在途，然后下载待人工确认的清单。'),
+                ('4 · 历史模拟对比','选择一个商品，保持默认测试日期，选择交期并填写初始库存。点击运行，比较两种策略的满足率与库存占用。下载实验 ZIP 可保留逐日记录和配置。')]:
+                with st.container(border=True): section(title,body)
+            st.info('演示验证：先记住某商品建议数量，再到库存配置增加现货，返回清单观察数量变化。取消「确认在途按期到货」，该商品会转为人工复核。')
     with tabs[1]:
         table_view(pd.DataFrame([
             ['现货数量','当前仓库中可以销售的商品数量。','8 件'],['在途数量','已经采购、尚未入库且预计按期到达的数量。','4 件'],['采购提前期','下单到开门前到货之间的天数，至少为1。','3 天'],['每箱件数','采购数量需要满足的整数倍。','6 件/箱'],['最小起订量','供应商要求的最低采购数量；没有则填0。','15 件'],['库存快照日期','库存盘点对应的决策日期，必须与页面提示一致。','演示为2010-07-01'],['保护期','采购提前期加上1天复核间隔。','交期3天 → 保护期4天'],['库存位置','现货与按期在途之和。','8 + 4 = 12 件']
         ],columns=['字段','填写或计算方法','示例']))
     with tabs[2]:
-        st.markdown('### 为什么建议补货18件？\n近28日日均销量为5件，交期3天，保护期4天，误差缓冲6件：\n\n1. 目标库存 = 向上取整（5 × 4 + 6）= 26件。\n2. 库存位置 = 现货8件 + 按期在途4件 = 12件。\n3. 缺口 = 26 − 12 = 14件。\n4. 起订量15件、每箱6件，所以向上取整为18件。')
+        guide_example()
         st.warning('人工复核的数量为空，不等于建议0件。请先补齐相关信息再生成建议。')
         st.markdown('**件数满足率：**模拟满足的需求件数占比，越高代表缺货越少。\n\n**平均期末库存：**每天营业结束后的平均存货，越高通常意味着占用更多库存。应与满足率一起比较。\n\n**固定比例缓冲：**在预测保护期需求上增加20%。**历史误差缓冲：**依据历史预测误差确定缓冲，两者共享相同回放条件。')
     with tabs[3]:
         for q,a in [('为什么全部需要人工复核？','检查库存日期和交期，确认在途可按期到货。最近28天必须完整，还需至少20个已经结束的历史误差窗口；建议准备90天以上连续数据。'),('为什么上传后还没有建议？','上传只是读取文件，还需确认字段和日期区间，勾选覆盖确认并点击核验。然后进入库存配置。'),('能直接用Excel文件吗？','当前页面接收CSV。请在Excel中另存为CSV UTF-8，并将订单号、商品编码保留为文本。'),('关闭或刷新页面数据会保存吗？','数据主要保存在当前会话中。请及时下载库存模板、清单和实验结果；新会话需要重新导入。'),('会自动向供应商下单吗？','不会。导出的清单须由经营者审核后自行采购。'),('回放结果是否代表真实利润改善？','不代表。需求来自历史成交量，库存和缺货是模拟值；本工具尚未使用真实商户数据验证。')]:
             with st.expander(q): st.write(a)
+    with tabs[4]:
+        for name, (purpose, next_use) in PAGE_HELP.items():
+            with st.expander(page_name(name)):
+                st.write(purpose)
+                st.write(next_use)
+        st.subheader('AI 辅助功能')
+        st.markdown("""
+- **导入与质检 · 智能匹配表头**　先按常见列名匹配。启用 AI 后，可发送陌生列名辅助匹配，最终请核对必填字段。
+- **补货清单 · AI 补货解释与问答**　选商品并授权发送计算证据及问题。建议数量由补货规则计算，以页面证据为准。
+- **采购与到货 · AI 录采购**　从文字或单据照片生成可编辑草稿。逐行核对商品、总件数和日期，再确认登记。收货请另行登记。
+- **共享额度**　侧栏显示千问和 DeepSeek 当日合计剩余次数，北京时间零点重置。
+""")
 elif page=='公平实验室':
     from core.study import run_study
     if 'daily' not in st.session_state: st.info('请先导入并核验数据。');st.stop()
     st.warning('探索性测试集分析：扫描结果与事后最优比例不能直接当作可部署策略，也不证明任何算法普遍更优。')
     daily=st.session_state.daily
+    if daily.empty:
+        st.info('请先导入含有有效销售记录的数据，再运行实验。')
+        st.stop()
     selected=st.multiselect('参与实验的商品',list(daily.sku.unique()),default=list(daily.sku.unique())[:3],placeholder='请选择商品')
     dates=date_range('实验测试日期',((daily.date.max()-pd.Timedelta(days=13)).date(),daily.date.max().date()))
     c1,c2,c3=st.columns(3)
@@ -243,21 +288,32 @@ elif page=='公平实验室':
             except ValueError as e: st.error(str(e))
     if 'study' in st.session_state:
         result,meta=st.session_state.study
-        st.caption('以下为上次运行结果；修改配置后需重新运行。')
-        summary=result['summary'].replace({'baseline':'固定比例','adaptive':'历史误差'})
-        st.plotly_chart(px.line(summary,x='mean_stock',y='fill_rate',color='policy',markers=True,hover_data=['parameter','dominated'],labels={'mean_stock':'平均库存（件）','fill_rate':'商品平均满足率','policy':'策略','parameter':'参数','dominated':'是否被支配'},title='库存—满足率扫描（连线仅辅助阅读）'),width='stretch',config={'displayModeBar':False})
-        st.write('被支配：存在另一个扫描点库存不更多、满足率不更低，且至少一项严格更好。无交点时不虚构交点；等库存比较只在已有前沿范围内线性插值，不外推。')
+        saved = meta['config']
+        st.subheader('本次实验结果与图表说明')
+        st.caption(f"已运行 {len(meta['skus'])} 个商品 / {saved['start']} 至 {saved['end']} / 交期 {saved['lead_days']} 天 / 历史窗口 {saved['window']} 天。修改输入后需重新运行。")
+        st.write('先看参数散点，再看是否有可比较的等库存结果。历史模拟对比固定一组条件，这里同时扫描两类规则的多个参数。')
+        study_charts(result)
         table_view(result['equal_inventory'].rename(columns={'scale':'误差系数','mean_stock':'平均库存','adaptive_fill':'历史误差满足率','baseline_interpolated':'固定比例等库存插值','difference':'满足率差（历史误差减固定比例）'}))
         ci=result['ci']
-        st.write('按商品配对自助法：历史误差系数1减固定比例0.2的满足率差。该比较库存不同，不能独立证明效率优势。')
-        st.write(f"商品数：{ci['n']}；差值：{ci['difference']}；95%区间：[{ci['low']}, {ci['high']}]")
-        st.caption('少于2个商品不计算区间；区间跨零时不宣称显著差异。该区间不适用于等库存插值或事后选出的最优策略。')
         st.subheader('事后最优比例参照')
         st.write('按当前测试集成本为每个商品选比例，是已知测试结果的理想参照，存在前视信息，不可部署。')
         table_view(chinese(result['oracle'][['sku','parameter','fill_rate','mean_stock','cost']]).rename(columns={'parameter':'事后选择比例','cost':'假设总成本'}))
         st.subheader('成本比率敏感性')
         st.write('总成本 = 库存件天 × 每件每日持有成本 + 缺货件数 × 缺货成本 + 下单次数 × 每次下单成本。未计入售价、利润、采购成本及期末在途估值。')
         scan=result['cost_scan'];winners=scan.loc[scan.groupby('shortage_holding_ratio').cost.idxmin()]
+        cost_lines = scan.loc[scan.groupby(['shortage_holding_ratio','policy']).cost.idxmin()].copy()
+        cost_lines = chinese(cost_lines)
+        costs = scan.groupby(['shortage_holding_ratio','policy']).cost.min().unstack()
+        delta = costs.adaptive - costs.baseline
+        tied = delta.abs() < 1e-8
+        st.info(f'**本次成本结果**　扫描的 {len(delta)} 种成本比中，历史误差缓冲最低成本更低的有 '
+                f'{int(((delta < 0) & ~tied).sum())} 种，固定比例缓冲更低的有 {int(((delta > 0) & ~tied).sum())} 种，'
+                f'两者相同的有 {int(tied.sum())} 种。')
+        show_chart(px.line(cost_lines.sort_values('shortage_holding_ratio'), x='shortage_holding_ratio', y='cost',
+                           color='补货策略', markers=True, color_discrete_map=COLORS, hover_data=['parameter'],
+                           labels={'shortage_holding_ratio':'缺货成本 / 持有成本','cost':'模拟总成本（元）','parameter':'参数'},
+                           title='两类规则在各成本比下的最低扫描成本'),
+                   '在同一个成本比下，越低表示模拟总成本越少。每个点取该规则的最低扫描成本，相邻点可能来自不同参数。')
         table_view(winners.replace({'baseline':'固定比例','adaptive':'历史误差'}).rename(columns={'shortage_holding_ratio':'缺货/持有成本比','policy':'扫描内最低成本策略','parameter':'参数','cost':'总成本'}))
         buf=io.BytesIO()
         with zipfile.ZipFile(buf,'w') as z:
@@ -332,7 +388,16 @@ else:
             if st.form_submit_button('保存该商品配置',type='primary'):
                 for k,v in changes.items(): st.session_state.inventory.loc[idx,k]=v
                 st.success('已保存。进入补货清单即可查看更新后的建议。')
-        table_view(chinese(st.session_state.inventory))
+        inventory = st.session_state.inventory
+        stock_chart = inventory[['sku','on_hand','on_order']].copy()
+        stock_chart['合计'] = stock_chart.on_hand + stock_chart.on_order
+        stock_chart = chinese(stock_chart.nlargest(12,'合计').drop(columns='合计'))
+        stock_chart = stock_chart.melt(id_vars='商品编码', var_name='库存类型', value_name='件数')
+        figure = px.bar(stock_chart, x='件数', y='商品编码', color='库存类型', orientation='h',
+                        title='现货与在途 · 按合计件数最多的12个商品')
+        figure.update_yaxes(type='category', autorange='reversed')
+        show_chart(figure, '现货可直接销售，在途仍待入库。下方明细包含全部商品。', height=400)
+        table_view(chinese(inventory))
         st.button('下一步：查看补货建议 →',on_click=navigate,args=('补货清单',),type='primary')
     elif page=='补货清单':
         section('本次补货建议','建议下单：存在库存缺口；暂不补货：当前库存位置已达到目标；人工复核：信息不足，暂不给出数量。')
@@ -351,6 +416,23 @@ else:
         st.caption('覆盖天数按现货、按期在途与本次补货合计除以历史日均销量估算；不代表到货前不会缺货。')
         search=st.text_input('查找商品编码或名称');statuses=st.multiselect('状态',list(out.status.unique()),default=list(out.status.unique()))
         filtered=out[(out.sku.str.contains(search,regex=False)|out['商品名称'].str.contains(search,regex=False))&out.status.isin(statuses)]
+        if filtered.empty:
+            st.info('没有符合当前筛选条件的商品，可清空搜索或调整状态。')
+        else:
+            counts = (filtered.status.value_counts()
+                      .reindex(['建议下单','暂不补货','人工复核'], fill_value=0)
+                      .rename_axis('处理状态').reset_index(name='商品数'))
+            show_chart(px.bar(counts, x='处理状态', y='商品数', color='处理状态',
+                              color_discrete_map={'建议下单':'#217664','暂不补货':'#4d7193','人工复核':'#b15a25'},
+                              title='筛选结果的补货状态'),
+                       '人工复核商品需要补齐资料后才能给出数量。上方指标统计全部商品。', height=290)
+            orders = filtered[filtered.status == '建议下单'].sort_values('qty', ascending=False, kind='stable').head(12)
+            if not orders.empty:
+                figure = px.bar(orders, x='qty', y='sku', hover_data=['商品名称'], orientation='h',
+                                labels={'sku':'商品编码','qty':'建议补货（件）'},
+                                title='建议补货件数最多的12个匹配商品')
+                figure.update_yaxes(type='category', autorange='reversed')
+                show_chart(figure, '悬停可看商品名称和件数。下方明细保留筛选范围内的全部商品。', height=390)
         table_view(chinese(filtered[['sku','商品名称','status','qty','现货（件）','建议箱数','预计库存覆盖（天）']]),hide_index=True,width='stretch')
         if (out.status=='人工复核').any():
             st.warning('请优先处理人工复核商品，数量为空时不能按零采购理解。')
@@ -393,10 +475,28 @@ else:
                 st.caption('已保存的本次会话实验：商品 '+saved_sku+' / '+saved_cfg['start']+' 至 '+saved_cfg['end'])
                 st.subheader('策略对比结果')
                 st.info('先看件数满足率，再看平均库存：满足率高但库存也高，说明减少缺货的同时增加了库存占用。比例指标以百分比显示；无需求时满足率不适用。')
+                replay_reading(metrics)
+                summary_chart = metrics[['policy','fill_rate','mean_stock']].rename(columns=LABELS)
+                summary_chart['补货策略'] = summary_chart['补货策略'].map(POLICIES)
+                left, right = st.columns(2)
+                with left:
+                    fill_chart = summary_chart.dropna(subset=['件数满足率'])
+                    if fill_chart.empty:
+                        st.info('测试区间销量为零，件数满足率无可计算值。')
+                    else:
+                        figure = px.bar(fill_chart, x='补货策略', y='件数满足率', color='补货策略', title='件数满足率')
+                        figure.update_yaxes(tickformat='.0%', range=[0,1])
+                        show_chart(figure, '已满足件数占模拟需求件数的比例。', height=280)
+                with right:
+                    show_chart(px.bar(summary_chart, x='补货策略', y='平均期末库存（件）', color='补货策略',
+                                      title='平均期末库存'),
+                               '库存占用与满足率需一起比较。', height=280)
                 table_view(chinese(metrics),hide_index=True)
                 chart=chinese(timeline)
-                st.plotly_chart(px.line(chart,x='日期',y='期末现货（件）',color='补货策略',title='期末库存轨迹'),width='stretch',config={"displayModeBar":False})
-                st.plotly_chart(px.bar(chart,x='日期',y='未满足需求（件）',color='补货策略',barmode='group',title='每日未满足需求'),width='stretch',config={'displayModeBar':False})
+                show_chart(px.line(chart,x='日期',y='期末现货（件）',color='补货策略',color_discrete_map=COLORS,title='期末库存轨迹'),
+                           '每条线表示一种规则在每个历史日结束时剩余的现货。库存见底的日期，可与下图对应查看。')
+                show_chart(px.bar(chart,x='日期',y='未满足需求（件）',color='补货策略',color_discrete_map=COLORS,barmode='group',title='每日未满足需求'),
+                           '同一天并排比较两种规则。柱越高，当天模拟缺货的件数越多；本模型将缺货记在当天。')
                 st.subheader('每日到货、下单与缺货明细')
                 table_view(chinese(timeline),hide_index=True)
                 buf=io.BytesIO()
@@ -405,10 +505,12 @@ else:
                 st.download_button('导出可复现实验 ZIP',buf.getvalue(),'experiment.zip')
             except ValueError as e: st.error(str(e))
         st.subheader('多条件稳健性检查')
-        st.caption('固定当前商品及测试区间，最多8组组合。保留不理想结果，不按测试表现自动选参数。')
+        st.caption('保持商品和测试期相同，组合不同初始库存、交期和箱规。用并排柱对比同组内的满足率和平均库存。最多 8 组。')
         stocks=st.multiselect('比较的初始库存（件）',[0,20,100,300],default=[20,100])
         leads=st.multiselect('比较的交期（天）',[2,4,7],default=[2,7])
         packs=st.multiselect('比较的箱规（件）',[1,6,12],default=[1,6])
+        combination_count = len(stocks) * len(leads) * len(packs)
+        st.caption(f'当前选择形成 {combination_count} 组条件。')
         scenario_cfg=dict(start=str(dates[0]),end=str(dates[1])) if len(dates)==2 else None
         if st.button('运行多条件检查'):
             try:
@@ -422,7 +524,19 @@ else:
             scenarios,comparisons,scfg=st.session_state.scenario_result
             current=dict(sku=sku,config=scenario_cfg,stocks=stocks,leads=leads,packs=packs,data_hash=st.session_state.data_hash)
             if current!=scfg: st.warning('输入已变，下方保留旧条件结果；重新运行才会更新。')
-            st.caption('结果商品：'+scfg['sku']+'；区间：'+str(scfg['config']))
+            st.caption(f"结果商品 {scfg['sku']} / {scfg['config']['start']} 至 {scfg['config']['end']}")
+            scenario_charts(scenarios, comparisons)
+            if not comparisons.empty:
+                deltas = comparisons.dropna(subset=['fill_delta'])
+                if not deltas.empty:
+                    figure = px.bar(deltas, x='scenario', y='fill_delta', hover_data=['inventory_delta'],
+                                    labels={'scenario':'条件编号','fill_delta':'满足率差','inventory_delta':'平均库存差（件）'},
+                                    title='多条件下的满足率差')
+                    figure.update_xaxes(type='category')
+                    figure.update_yaxes(tickformat='.1%')
+                    figure.update_traces(hovertemplate='第 %{x} 组<br>满足率差 %{y:+.1%}<br>平均库存差 %{customdata[0]:+,.1f} 件')
+                    figure.add_hline(y=0, line_color='#667c76')
+                    show_chart(figure, '差值为历史误差缓冲减固定比例缓冲。悬停可看同一条件的平均库存差。', height=300)
             table_view(chinese(scenarios),hide_index=True)
             table_view(comparisons.rename(columns={'scenario':'条件编号','fill_delta':'满足率差（自适应减基线）','inventory_delta':'平均库存差（件）','conclusion':'本条件观察'}),hide_index=True)
             package=io.BytesIO()

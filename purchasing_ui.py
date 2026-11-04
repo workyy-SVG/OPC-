@@ -4,8 +4,10 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
+from ui import show_chart
 from core.policy import recommend
 from core.purchasing import add_purchase, receive, project, save_workspace, load_workspace, receive_into_inventory
 
@@ -81,7 +83,13 @@ def render(daily, inventory, as_of, require_actual=False):
             table.append({'采购编号': record['id'], '商品': record['sku'], '采购数量': record['qty'],
                           '已到货': received, '剩余在途': record['qty'] - received,
                           '预计到货': record['expected_at'], '确认或修改原因': record['reason']})
-        st.dataframe(pd.DataFrame(table), hide_index=True)
+        ledger_table = pd.DataFrame(table)
+        delivery = ledger_table.groupby('预计到货', as_index=False)[['已到货','剩余在途']].sum()
+        delivery = delivery.melt(id_vars='预计到货', var_name='收货状态', value_name='件数')
+        figure = px.bar(delivery, x='预计到货', y='件数', color='收货状态', title='按采购单预计日期汇总收货进度')
+        figure.update_xaxes(type='date')
+        show_chart(figure, '每根柱按采购单的预计日期归类。实际收货日期请查下方库存流水。')
+        st.dataframe(ledger_table, hide_index=True)
         pending = [r for r in records if sum(x['qty'] for x in r['receipts']) < r['qty']]
         if pending:
             chosen = st.selectbox('登记到货的采购', [r['id'] for r in pending],
@@ -134,5 +142,15 @@ def render(daily, inventory, as_of, require_actual=False):
             st.warning('预计首次缺货：' + shortages.iloc[0]['date'] + '，请核对采购到货安排。')
         else:
             st.success('当前假设下，未来14天未预测到缺货。')
-        st.dataframe(projection.rename(columns={'date':'日期','arrival':'当日到货','demand':'预计销量','ending_stock':'预计期末现货','shortage':'预计未满足需求'}), hide_index=True)
+        risk = projection.rename(columns={'date':'日期','arrival':'当日到货','demand':'预计销量',
+                                          'ending_stock':'预计期末现货','shortage':'预计未满足需求'})
+        figure = px.line(risk, x='日期', y='预计期末现货', markers=True, title=f'{sku} · 未来14天预计现货（件）',
+                         hover_data=['当日到货','预计销量','预计未满足需求'])
+        if not shortages.empty:
+            figure.add_scatter(x=shortages.date, y=shortages.ending_stock, mode='markers',
+                               name='预计缺货日', marker=dict(color='#b15a25', size=10),
+                               customdata=shortages[['shortage']], hovertemplate='%{x}<br>预计未满足 %{customdata[0]:.1f} 件<extra></extra>')
+        figure.update_xaxes(type='date')
+        show_chart(figure, '橙色圆点表示预计有需求无法满足的日期。悬停可查看缺口及到货信息。')
+        st.dataframe(risk, hide_index=True)
         st.caption('这是固定日均需求下的模拟；未包含波动缓冲、缺货失销量、保质期和资金约束。确认收货自动更新现货；跨日销售和盘点仍需核对。')
