@@ -1,7 +1,9 @@
 """Historical-data demonstration, isolated from operational session stock."""
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
+from ui import show_chart
 from core.simulation import create, step, report, export_json, fingerprint
 
 
@@ -99,7 +101,17 @@ def simulation_dashboard(daily):
         with st.expander('该日采购计算证据'):
             st.json(decision)
         timeline = pd.DataFrame(state['timeline'])
-        st.line_chart(timeline.set_index('date')[['ending_stock','on_order']].rename(columns=LABELS))
+        stock = timeline[['date','ending_stock','on_order']].rename(columns=LABELS)
+        stock['模拟日期'] = pd.to_datetime(stock['模拟日期'])
+        figure = px.line(stock, x='模拟日期', y=['模拟期末现货','模拟在途'], markers=True,
+                         labels={'value':'件数','variable':'库存类型'}, title='模拟库存如何变化')
+        show_chart(figure, '期末现货是当天出库后剩余的件数。在途是已模拟下单、尚未入库的件数。')
+        demand = timeline[['date','fulfilled','shortage']].rename(columns=LABELS)
+        demand['模拟日期'] = pd.to_datetime(demand['模拟日期'])
+        show_chart(px.bar(demand, x='模拟日期', y=['模拟实际出库','模拟未满足需求'],
+                          labels={'value':'件数','variable':'需求结果'}, title='每日需求满足情况',
+                          color_discrete_sequence=['#217664','#b15a25']),
+                   '两段合计为当天历史销量代理。橙色部分显示模拟库存无法满足的件数。')
         st.subheader('逐日导入与库存记录')
         st.dataframe(timeline.rename(columns=LABELS), hide_index=True)
         with st.expander('模拟采购和分日到货记录'):
