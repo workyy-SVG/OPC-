@@ -82,7 +82,43 @@ def ai_budget_sidebar():
         st.caption('北京时间零点重置。请求失败也计数。')
     except Exception:
         st.warning('额度存储不可用，AI调用暂不可用。')
+CURRENCIES = {'CNY':'人民币 · 元（CNY）','USD':'美元（USD）','GBP':'英镑（GBP）','EUR':'欧元（EUR）',
+              'HKD':'港元（HKD）','JPY':'日元（JPY）','AUD':'澳元（AUD）','CAD':'加元（CAD）','SGD':'新加坡元（SGD）'}
+CURRENCY_UNITS = {'CNY':'元','USD':'美元','GBP':'英镑','EUR':'欧元','HKD':'港元','JPY':'日元','AUD':'澳元','CAD':'加元','SGD':'新加坡元'}
+st.session_state.setdefault('sales_currency', 'GBP' if st.session_state.get('is_demo') else 'CNY')
+def currency_unit(code=None):
+    default = 'GBP' if st.session_state.get('is_demo') else 'CNY'
+    return CURRENCY_UNITS.get(code or st.session_state.get('sales_currency',default),'元')
+
 def navigate(target): st.session_state['navigation']=target
+
+def reset_navigation_scroll():
+    if not page_changed:
+        return
+    # Run after the destination is rendered. Streamlit's scroll container is
+    # stMain, rather than the browser window. Briefly disable scroll anchoring
+    # while delayed widgets mount; stop immediately if the user interacts.
+    st.html('<!-- navigation '+uuid4().hex+' -->'+'''<script>
+    (() => {
+        const main = document.querySelector('[data-testid="stMain"]');
+        if (!main) return;
+        const oldAnchor = main.style.overflowAnchor;
+        main.style.overflowAnchor = 'none';
+        let stopped = false;
+        const top = () => { if (!stopped) main.scrollTo({top:0,left:0,behavior:'instant'}); };
+        const stop = () => {
+            stopped = true;
+            main.style.overflowAnchor = oldAnchor;
+            for (const event of ['wheel','touchstart','pointerdown','keydown'])
+                document.removeEventListener(event,stop,true);
+        };
+        for (const event of ['wheel','touchstart','pointerdown','keydown'])
+            document.addEventListener(event,stop,{capture:true,passive:true});
+        top(); requestAnimationFrame(top);
+        for (const delay of [100,300,700]) setTimeout(top,delay);
+        setTimeout(stop,1000);
+    })();
+    </script>''', unsafe_allow_javascript=True)
 def open_dictionary():
     st.session_state.guide_default_tab = '字段字典'
     navigate('使用指南')
@@ -94,6 +130,8 @@ def cancel_actual_mode():
     st.session_state.update(usage_mode='演示探索', actual_mode_confirmed=False)
 
 page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','采购与到货','策略回放','公平实验室','模拟经营','数据与说明','使用指南'],key='navigation',format_func=page_name)
+page_changed = st.session_state.get('_last_rendered_page') != page
+st.session_state['_last_rendered_page'] = page
 if page!='模拟经营': st.session_state.simulation_running=False
 st.sidebar.caption('适用于单家门店。采购量按整件计算，建议每天核对库存和到货。')
 mode_choice = st.sidebar.radio(
@@ -141,7 +179,7 @@ def reason_text(code):
     return REASONS.get(code, '请检查'+LABELS.get(code.removeprefix('INVALID_').lower(),code)+'是否为有效非负整数')
 
 LABELS.update({'parameter_kind':'参数性质','verified':'用户已核实声明','evidence_type':'结果证据类型','scenario':'条件编号','initial_stock':'初始库存（件）'})
-def chinese(df):
+def chinese(df, currency=None):
     result=df.copy()
     if 'policy' in result: result['policy']=result.policy.replace({'baseline':'固定比例缓冲','adaptive':'历史误差缓冲'})
     if 'reason_code' in result: result['reason_code']=result.reason_code.map(reason_text)
@@ -151,7 +189,8 @@ def chinese(df):
     if 'reason_codes' in result: result['reason_codes']=result.reason_codes.map(lambda codes:'；'.join(reason_text(c) for c in codes) if isinstance(codes,list) else codes)
     for col in ['fill_rate','stockout_rate','review_rate','common_eligible_rate']:
         if col in result: result[col]=result[col].map(lambda v: '不适用' if pd.isna(v) else f'{v:.1%}')
-    return result.rename(columns=LABELS|{'unit_price':'单价','description':'商品描述'})
+    price_label = '单价（'+currency_unit(currency)+'/件）'
+    return result.rename(columns=LABELS|{key:price_label for key in ('unit_price','单价','价格','Price','UnitPrice')}|{'description':'商品描述'})
 def section(title,description):
     st.subheader(title);st.write(description)
 
@@ -159,7 +198,11 @@ def download(label,df,name): st.download_button(label,csv_bytes(df),name,'text/c
 DEMO_RANGE = (pd.Timestamp('2010-01-01').date(), pd.Timestamp('2010-06-30').date())
 DEMO_SOURCE = '英国零售公开样本'
 
-def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source, preserve=False, allow_revision=False):
+def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source, preserve=False, allow_revision=False, currency='CNY'):
+    if currency not in CURRENCIES:
+        raise ValueError('请选择有效的价格币种')
+    if preserve and st.session_state.get('sales_currency',currency) != currency:
+        raise ValueError('更新当前店铺时请保持价格币种一致；更换币种请新建工作区。金额不会自动换算。')
     data_hash = hashlib.sha256(raw).hexdigest()
     signature = hashlib.sha256(daily.sort_values(['sku','date']).to_csv(index=False).encode()).hexdigest()
     previous = st.session_state.get('daily')
@@ -192,7 +235,7 @@ def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source, pr
         named = clean[clean.description.astype(str).str.strip().ne('')].drop_duplicates('sku')
         names.update(named.set_index('sku').description.to_dict())
     st.session_state.update(raw=raw, daily=daily, issues=issues, summary=summary, data_hash=data_hash, sales_signature=signature,
-                            product_names=names, sales_source=source, coverage=coverage, is_demo=is_demo)
+                            product_names=names, sales_source=source, coverage=coverage, is_demo=is_demo, sales_currency=currency)
 
 def apply_inventory(candidate):
     from core.purchasing import save_workspace
@@ -211,7 +254,7 @@ def quick_demo(target='补货清单'):
     raw = Path('data/demo/orders.csv').read_bytes()
     clean, issues, summary = parse_orders(pd.read_csv(io.BytesIO(raw), dtype=str), source="uci")
     daily = build_daily(clean, pd.date_range(*DEMO_RANGE))
-    save_sales(raw, clean, issues, summary, daily, DEMO_RANGE, True, DEMO_SOURCE)
+    save_sales(raw, clean, issues, summary, daily, DEMO_RANGE, True, DEMO_SOURCE, currency='GBP')
     cancel_actual_mode()
     navigate(target)
 
@@ -225,6 +268,7 @@ def require_sales():
     left.button('前往导入与质检', on_click=navigate, args=('导入与质检',), type='primary')
     if not has_data:
         right.button('加载示例数据', on_click=quick_demo, args=(page,))
+    reset_navigation_scroll()
     st.stop()
 
 def product_label(sku, names=st.session_state.get('product_names', {})):
@@ -336,7 +380,7 @@ elif page=='导入与质检':
                 candidate = uploaded
                 st.session_state.last_sales_upload_id = upload.file_id
         if candidate != st.session_state.get('sales_candidate'):
-            for key in ('map_order_id','map_sku','map_order_at','map_qty','sales_coverage_confirmed',
+            for key in ('map_order_id','map_sku','map_order_at','map_qty','sales_coverage_confirmed','sales_import_currency',
                         '已完整覆盖的营业日期区间start','已完整覆盖的营业日期区间end'):
                 st.session_state.pop(key, None)
             st.session_state.sales_candidate = candidate
@@ -350,7 +394,12 @@ elif page=='导入与质检':
                 st.error(f'无法读取 CSV。请检查文件编码和格式。{error}')
             else:
                 section('第二步 · 检查字段与日期','核对预览，再对应四个必填列。商品名称可选，填写后会随商品编码显示。')
-                table_view(chinese(df.head(10)), hide_index=True)
+                default_currency = 'GBP' if is_demo else st.session_state.get('sales_currency','CNY') if not st.session_state.get('is_demo') else 'CNY'
+                import_currency = st.selectbox('价格币种', list(CURRENCIES), index=list(CURRENCIES).index(default_currency),
+                    format_func=CURRENCIES.get, key='sales_import_currency', disabled=is_demo,
+                    help='按原始单价选择币种；同一份数据应使用同一币种。')
+                st.caption('UCI 样本原始单价以英镑计价。' if is_demo else '此选项仅标注原始价格单位，不进行汇率换算。')
+                table_view(chinese(df.head(10), import_currency), hide_index=True)
                 from ai_ui import headers_ui
                 headers_ui(list(df.columns))
                 mapping = {}
@@ -413,13 +462,14 @@ elif page=='导入与质检':
                         if len(outside) and not allow_outside:
                             raise ValueError(f'有{len(outside)}条有效销售在覆盖区间外，请调整日期或明确允许排除')
                         save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source,
-                                   preserve=ready and import_mode.startswith('更新'), allow_revision=ready and allow_revision)
+                                   preserve=ready and import_mode.startswith('更新'), allow_revision=ready and allow_revision, currency=import_currency)
                         st.session_state.sales_import_finished = True
                         st.rerun()
                     except (ValueError, TypeError, KeyError) as error:
                         st.error(str(error))
     if 'summary' in st.session_state:
         section('第四步 · 查看核验结果','已自动处理的记录无需修改；疑似重复仍计入销量，请复核。错误行已隔离，修正后重新导入才能计入。')
+        st.caption('本次数据价格币种：'+CURRENCIES.get(st.session_state.get('sales_currency','CNY'))+' · 单价按每件标注，金额未作汇率换算。')
         names={'valid':'有效销售','cancelled':'取消订单','returned':'退货记录','suspicious':'疑似重复（已保留）','error':'错误记录','excluded':'非商品记录','duplicate':'已剔除重复'}
         quality_charts(st.session_state.summary, names)
         if st.session_state.issues.empty: st.success('未发现问题记录。下一步：在左侧打开「库存配置」，核对实际现货和交期。')
@@ -502,9 +552,10 @@ elif page=='公平实验室':
         window=c2.selectbox('参考过去多少天销量',[14,28,56],index=1,help='默认 28 天，覆盖四个完整星期。')
         quantile=c3.selectbox('预测误差取值水平',[.8,.9,.95],index=1,format_func=lambda value:f'{value:.0%}',
                               help='默认 90%，用历史偏差中偏大的值留余量。比例越高，通常留得越多。')
-        holding=st.number_input('每件每天持有成本（元，假设值）',min_value=.01,value=1.,help='一件货多存一天的费用，例如仓储和资金占用。')
-        penalty=st.number_input('每件缺货成本（元，假设值）',min_value=0.,value=10.,help='少卖一件的估算损失。默认 10 元用于演示。')
-        ordering=st.number_input('每次下单成本（元，假设值）',min_value=0.,value=0.,help='每次采购额外产生的固定费用，例如运费。暂不计入可填 0。')
+        unit=currency_unit()
+        holding=st.number_input(f'每件每天持有成本（{unit}，假设值）',min_value=.01,value=1.,help='一件货多存一天的费用，例如仓储和资金占用。')
+        penalty=st.number_input(f'每件缺货成本（{unit}，假设值）',min_value=0.,value=10.,help=f'少卖一件的估算损失。默认 10 {unit}用于演示。')
+        ordering=st.number_input(f'每次下单成本（{unit}，假设值）',min_value=0.,value=0.,help='每次采购额外产生的固定费用，例如运费。暂不计入可填 0。')
         st.caption('两种方法都从 20 件现货开始，起初没有在途，每箱 1 件。')
         with st.expander('实验术语与适用范围'):
             st.write('**被支配**　有另一组参数用同样多或更少的库存，满足率同样高或更高，且至少一项更好。')
@@ -516,10 +567,11 @@ elif page=='公平实验室':
             with st.spinner('正在逐商品扫描策略参数，请稍候…'):
                 try:
                     result=study.run_study(daily[daily.sku.isin(selected)],cfg,holding=holding,shortage_cost=penalty,order_cost=ordering)
-                    st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,data_hash=st.session_state.data_hash,version=VERSION,bootstrap_seed=42,bootstrap_repeats=2000,axis_cohort='positive_demand'))
+                    st.session_state.study=(result,dict(config=cfg,skus=selected,holding=holding,shortage_cost=penalty,order_cost=ordering,currency=st.session_state.get('sales_currency','CNY'),data_hash=st.session_state.data_hash,version=VERSION,bootstrap_seed=42,bootstrap_repeats=2000,axis_cohort='positive_demand'))
                 except ValueError as e: st.error(str(e))
         if 'study' in st.session_state and st.session_state.study[1].get('axis_cohort') == 'positive_demand':
             result,meta=st.session_state.study
+            saved_unit=currency_unit(meta.get('currency','CNY'))
             saved = meta['config']
             st.subheader('本次实验结果与图表说明')
             st.caption(f"已运行 {len(meta['skus'])} 个商品 / {saved['start']} 至 {saved['end']} / 交期 {saved['lead_days']} 天 / 历史窗口 {saved['window']} 天。修改输入后需重新运行。")
@@ -529,7 +581,7 @@ elif page=='公平实验室':
             ci=result['ci']
             st.subheader('看完这段历史后选出的参考设置')
             st.caption('按本次模拟成本给每个商品挑选固定缓冲比例，用来对照结果。')
-            table_view(chinese(result['oracle'][['sku','parameter','fill_rate','mean_stock','cost']]).rename(columns={'parameter':'事后选择比例','cost':'假设总成本'}))
+            table_view(chinese(result['oracle'][['sku','parameter','fill_rate','mean_stock','cost']]).rename(columns={'parameter':'事后选择比例','cost':f'假设总成本（{saved_unit}）'}))
             st.subheader('改变成本假设后，哪种方法花费更少？')
             st.write('总成本 = 库存件天 × 每件每日持有成本 + 缺货件数 × 缺货成本 + 下单次数 × 每次下单成本。未计入售价、利润、采购成本及期末在途估值。')
             scan=result['cost_scan'];winners=scan.loc[scan.groupby('shortage_holding_ratio').cost.idxmin()]
@@ -543,10 +595,10 @@ elif page=='公平实验室':
                     f'两者相同的有 {int(tied.sum())} 种。')
             show_chart(px.line(cost_lines.sort_values('shortage_holding_ratio'), x='shortage_holding_ratio', y='cost',
                                color='补货策略', markers=True, color_discrete_map=COLORS, hover_data=['parameter'],
-                               labels={'shortage_holding_ratio':'缺货成本 / 持有成本','cost':'模拟总成本（元）','parameter':'参数'},
+                               labels={'shortage_holding_ratio':'缺货成本 / 持有成本','cost':f'模拟总成本（{saved_unit}）','parameter':'参数'},
                                title='两类规则在各成本比下的最低扫描成本'),
                        '在同一个成本比下，越低表示模拟总成本越少。每个点取该规则的最低扫描成本，相邻点可能来自不同参数。')
-            table_view(winners.replace({'baseline':'固定比例','adaptive':'历史误差'}).rename(columns={'shortage_holding_ratio':'缺货/持有成本比','policy':'扫描内最低成本策略','parameter':'参数','cost':'总成本'}))
+            table_view(winners.replace({'baseline':'固定比例','adaptive':'历史误差'}).rename(columns={'shortage_holding_ratio':'缺货/持有成本比','policy':'扫描内最低成本策略','parameter':'参数','cost':f'总成本（{saved_unit}）'}))
             buf=io.BytesIO()
             with zipfile.ZipFile(buf,'w') as z:
                 for name,df in result.items():
@@ -575,6 +627,7 @@ else:
             st.rerun()
         if page!='库存配置':
             st.button('先去库存配置核对',on_click=navigate,args=('库存配置',))
+            reset_navigation_scroll()
             st.stop()
     if page=='模拟经营':
         simulation_ui.render(daily, product_label=product_label)
@@ -790,3 +843,5 @@ else:
                 z.writestr('comparisons.csv',csv_bytes(comparisons))
                 z.writestr('manifest.json',json.dumps(dict(**scfg,evidence_type='模拟敏感性实验，不能替代真实商户验证',lost_sales='原始订单未提供真实缺货失销量'),ensure_ascii=False,indent=2))
             st.download_button('导出全部条件与实验说明',package.getvalue(),'sensitivity-experiment.zip')
+
+reset_navigation_scroll()
