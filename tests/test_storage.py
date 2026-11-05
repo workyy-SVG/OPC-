@@ -56,7 +56,7 @@ def test_remote_request_uses_fixed_rpc_and_redacts_errors(monkeypatch):
     class Opener:
         def open(self,request,timeout):
             calls.append(request)
-            assert timeout==20
+            assert timeout==3
             return Response()
     monkeypatch.setattr(storage.urllib.request,'build_opener',lambda *a:Opener())
     assert storage.usage()==(7,93)
@@ -68,6 +68,22 @@ def test_remote_request_uses_fixed_rpc_and_redacts_errors(monkeypatch):
     monkeypatch.setattr(storage.urllib.request,'build_opener',lambda *a:Failed())
     with pytest.raises(storage.StorageError) as error:storage.usage()
     assert '401' in str(error.value) and 'test-server-secret' not in str(error.value)
+
+
+@pytest.mark.parametrize('operation,timeout', [('opc_quota_status',3),('opc_workspace_save',20)])
+def test_status_has_short_timeout_without_shortening_purchase_write(monkeypatch,operation,timeout):
+    enable(monkeypatch)
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self,*args): return b'1'
+    class Opener:
+        def open(self,request,timeout):
+            assert timeout == expected_timeout
+            return Response()
+    expected_timeout = timeout
+    monkeypatch.setattr(storage.urllib.request,'build_opener',lambda *args:Opener())
+    assert storage.rpc(operation,{}) == 1
 
 
 def test_remote_workspace_save_and_recovery(monkeypatch,tmp_path):

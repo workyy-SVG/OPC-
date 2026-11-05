@@ -55,7 +55,9 @@ def rpc(name, parameters):
     request=urllib.request.Request(secret('SUPABASE_URL').rstrip('/')+'/rest/v1/rpc/'+name,
         data=body,headers=headers)
     try:
-        with urllib.request.build_opener(NoRedirect).open(request,timeout=20) as response:
+        # Sidebar status must not hold manual business actions for 20 seconds.
+        timeout = 3 if name == 'opc_quota_status' else 20
+        with urllib.request.build_opener(NoRedirect).open(request,timeout=timeout) as response:
             raw=response.read(16*1024*1024+1)
         if len(raw)>16*1024*1024: raise StorageError('数据库快照过大，请拆分工作区')
         return json.loads(raw)
@@ -102,4 +104,4 @@ def reserve():
     if result is not True:
         raise StorageError('数据库额度扣减未确认，未发送AI请求')
 
-APP_REVISION = "audit-fixes-20261104"
+APP_REVISION = "purchase-submit-20261105"

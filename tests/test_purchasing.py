@@ -79,6 +79,57 @@ def test_purchase_page_create_and_receive():
     assert int(app.session_state.inventory.set_index('sku').loc[sku, 'on_hand']) == before + 1
 
 
+def test_confirm_purchase_does_not_repeat_page_or_save(monkeypatch):
+    from core import ai_quota
+    import purchasing_ui
+    calls = []
+    original_save = purchasing_ui.save_workspace
+    monkeypatch.setattr(ai_quota, 'usage', lambda: (calls.append('quota') or (0, 100)))
+    def save(*args, **kwargs):
+        calls.append('save')
+        return original_save(*args, **kwargs)
+    monkeypatch.setattr(purchasing_ui, 'save_workspace', save)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / 'app.py', default_timeout=15).run()
+    next(b for b in app.button if b.label == '用示例立即体验').click().run()
+    app.radio(key='navigation').set_value('采购与到货').run()
+    app.text_input(key='purchase_reason').set_value('慢连接回归测试')
+    app.checkbox(key='purchase_ack').check()
+    calls.clear()
+    next(b for b in app.button if b.label == '登记确认采购').click().run()
+    assert not app.exception
+    assert len(app.session_state.purchases) == 1
+    assert calls.count('save') == 1
+    assert calls.count('quota') == 1
+    assert not app.checkbox(key='purchase_ack').value
+
+
+def test_purchase_save_failure_keeps_form_and_request_for_retry(monkeypatch):
+    import purchasing_ui
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / 'app.py', default_timeout=15).run()
+    next(b for b in app.button if b.label == '用示例立即体验').click().run()
+    app.radio(key='navigation').set_value('采购与到货').run()
+    request_id = app.session_state.purchase_request_id
+    before = app.session_state.inventory.copy(deep=True)
+    original_save = purchasing_ui.save_workspace
+    def fail(*args, **kwargs):
+        raise TimeoutError('数据库连接超时')
+    monkeypatch.setattr(purchasing_ui, 'save_workspace', fail)
+    app.text_input(key='purchase_reason').set_value('保存失败重试')
+    app.checkbox(key='purchase_ack').check()
+    next(b for b in app.button if b.label == '登记确认采购').click().run()
+    assert not app.exception
+    assert not app.session_state.purchases
+    pd.testing.assert_frame_equal(before, app.session_state.inventory)
+    assert app.session_state.purchase_request_id == request_id
+    assert app.checkbox(key='purchase_ack').value
+    assert app.text_input(key='purchase_reason').value == '保存失败重试'
+    assert any('超时' in error.value for error in app.error)
+    monkeypatch.setattr(purchasing_ui, 'save_workspace', original_save)
+    next(b for b in app.button if b.label == '登记确认采购').click().run()
+    assert not app.exception
+    assert [p['id'] for p in app.session_state.purchases] == [request_id]
+
+
 @pytest.mark.parametrize('data', ['[]', 'null', '{"schema":1,"purchases":[null]}', '{"schema":1,"purchases":[{}]}'])
 def test_malformed_backup_is_rejected(data):
     with pytest.raises(ValueError): load_ledger(data)

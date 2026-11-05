@@ -117,25 +117,39 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
     recommendation = recommend(history, recommendation_stock, {'require_actual': require_actual}, as_of)
     suggested = recommendation['qty']
     st.write('当前规则建议：' + (str(suggested) + '件' if suggested is not None else '需人工复核'))
+    def confirm_purchase():
+        # Submit callbacks run before widgets are drawn. Save and clear the
+        # acknowledgement here instead of forcing a second full-page rerun.
+        st.session_state.pop('purchase_error', None)
+        try:
+            if not st.session_state.get('purchase_ack'):
+                raise ValueError('请先核对并确认采购条件')
+            with st.spinner('正在保存采购记录，请勿重复提交…', show_time=True):
+                ledger, inv = register_purchase(st.session_state.purchases, st.session_state.inventory,
+                    sku, st.session_state['purchase_qty_'+sku], st.session_state.purchase_ordered,
+                    st.session_state['purchase_expected_'+sku], st.session_state.purchase_reason,
+                    st.session_state.purchase_request_id, st.session_state.purchase_external, suggested)
+                persist(ledger, inv)
+            st.session_state.purchase_ack = False
+            st.session_state.purchase_reason = ''
+            st.session_state.purchase_external = False
+            st.session_state.purchase_request_id = uuid4().hex
+            st.session_state.receipt_notice = '采购已保存，已刷新在途和建议；再次采购请重新填写并确认。'
+        except (ValueError, TypeError, OSError) as error:
+            # Keep the request ID and entered values: a timed-out write may have
+            # committed remotely, and retrying must not create another order.
+            st.session_state.purchase_error = str(error)
+
     with st.form('confirm_purchase'):
-        qty = st.number_input('确认采购数量（件）', min_value=1, value=max(1, int(suggested or 1)), step=1)
-        ordered = st.date_input('采购日期', value=as_of.date())
-        expected = st.date_input('预计到货日期', value=(as_of + pd.Timedelta(days=int(stock['lead_days']))).date())
+        qty = st.number_input('确认采购数量（件）', min_value=1, value=max(1, int(suggested or 1)), step=1, key='purchase_qty_'+sku)
+        ordered = st.date_input('采购日期', value=as_of.date(), key='purchase_ordered')
+        expected = st.date_input('预计到货日期', value=(as_of + pd.Timedelta(days=int(stock['lead_days']))).date(), key='purchase_expected_'+sku)
         reason = st.text_input('确认或修改原因', key='purchase_reason', placeholder='例如：每箱件数、预算调整、人工复核依据')
         acknowledged = st.checkbox('我已核对库存、已有采购及供应商条件，确认登记此笔采购', key='purchase_ack')
-        external = st.checkbox('这是外部汇总在途的明细化登记（不新增在途总量）')
-        if st.form_submit_button('登记确认采购'):
-            try:
-                if not acknowledged:
-                    raise ValueError('请先核对并确认采购条件')
-                ledger, inv = register_purchase(st.session_state.purchases, st.session_state.inventory,
-                    sku, qty, ordered, expected, reason, st.session_state.purchase_request_id, external, suggested)
-                persist(ledger, inv)
-                st.session_state.purchase_form_reset = True
-                st.session_state.receipt_notice = '采购已保存，已刷新在途和建议；再次采购请重新填写并确认。'
-                st.rerun()
-            except (ValueError, TypeError, OSError) as error:
-                st.error(str(error))
+        external = st.checkbox('这是外部汇总在途的明细化登记（不新增在途总量）', key='purchase_external')
+        st.form_submit_button('登记确认采购', on_click=confirm_purchase)
+    if error := st.session_state.pop('purchase_error', None):
+        st.error(error)
 
     records = st.session_state.purchases
     if records:
@@ -223,4 +237,4 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
         st.dataframe(risk, hide_index=True)
         st.caption('这是固定日均需求下的模拟；未包含波动缓冲、缺货失销量、保质期和资金约束。确认收货自动更新现货；跨日销售和盘点仍需核对。')
 
-APP_REVISION = "audit-fixes-20261104"
+APP_REVISION = "purchase-submit-20261105"

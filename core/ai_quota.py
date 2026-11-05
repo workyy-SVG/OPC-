@@ -33,6 +33,28 @@ def usage():
     return used, max(0, LIMIT - used)
 
 
+def display_usage():
+    """Reuse remote sidebar status for 30s; reservations always query storage."""
+    from . import storage
+    if not storage.remote_enabled():
+        return usage()
+    import time
+    import streamlit as st
+    now, date = time.monotonic(), today()
+    cached = st.session_state.get('_quota_display')
+    if cached and cached['day'] == date and now - cached['at'] < 30:
+        if 'error' in cached:
+            raise storage.StorageError(cached['error'])
+        return cached['value']
+    try:
+        result = usage()
+    except storage.StorageError as error:
+        st.session_state['_quota_display'] = dict(day=date, at=time.monotonic(), error=str(error))
+        raise
+    st.session_state['_quota_display'] = dict(day=date, at=time.monotonic(), value=result)
+    return result
+
+
 def reserve():
     from . import storage
     if storage.remote_enabled(): return storage.reserve()
@@ -51,4 +73,4 @@ def reserve():
     finally:
         connection.close()
 
-APP_REVISION = "audit-fixes-20261104"
+APP_REVISION = "purchase-submit-20261105"

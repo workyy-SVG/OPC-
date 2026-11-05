@@ -7,7 +7,8 @@ from importlib import reload, import_module
 # are preserved; only older cached implementations are reloaded.
 for _module_name in ['core.numbers', 'core.storage', 'core.purchasing', 'core.inventory', 'core.ingest', 'core.policy', 'core.replay', 'core.validation', 'core.sales_update', 'core.study', 'core.holdout_study', 'core.simulation', 'core.ai_quota', 'core.ai', 'ui', 'results_ui', 'page_help', 'ai_ui', 'purchasing_ui', 'simulation_ui', 'holdout_ui']:
     _module = import_module(_module_name)
-    if getattr(_module,'APP_REVISION',None) != 'audit-fixes-20261104':
+    _expected_revision = 'purchase-submit-20261105' if _module_name in ('core.storage', 'core.ai_quota', 'purchasing_ui') else 'audit-fixes-20261104'
+    if getattr(_module,'APP_REVISION',None) != _expected_revision:
         reload(_module)
 import ai_ui
 import page_help
@@ -71,10 +72,10 @@ st.sidebar.title('📦 小店补货助手')
 st.sidebar.caption('让每一件补货，都有据可查')
 @st.fragment(run_every='30s')
 def ai_budget_sidebar():
-    from core.ai_quota import usage
+    from core.ai_quota import display_usage
     st.subheader('AI每日共享额度')
     try:
-        used, remaining = usage()
+        used, remaining = display_usage()
         st.metric('今日剩余调用', f'{remaining} / 100', help='千问和 DeepSeek 共用每日 100 次额度。')
         st.caption(f'AI 助手今日已用 {used} 次 · 全站共享')
         st.progress(min(used / 100, 1.0))
