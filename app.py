@@ -92,7 +92,7 @@ def page_name(name):
 def cancel_actual_mode():
     st.session_state.update(usage_mode='演示探索', actual_mode_confirmed=False)
 
-page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','策略回放','公平实验室','采购与到货','模拟经营','使用指南','数据与说明'],key='navigation',format_func=page_name)
+page=st.sidebar.radio('经营导航',['经营总览','导入与质检','库存配置','补货清单','采购与到货','策略回放','公平实验室','模拟经营','数据与说明','使用指南'],key='navigation',format_func=page_name)
 if page!='模拟经营': st.session_state.simulation_running=False
 st.sidebar.caption('适用于单家门店。采购量按整件计算，建议每天核对库存和到货。')
 mode_choice = st.sidebar.radio(
