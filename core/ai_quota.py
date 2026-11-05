@@ -13,7 +13,8 @@ def today():
 
 
 def connect():
-    path = Path(os.environ.get('AI_QUOTA_DB', 'outputs/ai_usage.sqlite3'))
+    from .storage import secret
+    path = Path(secret('AI_QUOTA_DB', 'outputs/ai_usage.sqlite3'))
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
     connection.execute('CREATE TABLE IF NOT EXISTS usage (day TEXT PRIMARY KEY, used INTEGER NOT NULL)')
@@ -21,6 +22,8 @@ def connect():
 
 
 def usage():
+    from . import storage
+    if storage.remote_enabled(): return storage.usage()
     connection = connect()
     try:
         row = connection.execute('SELECT used FROM usage WHERE day=?', (today(),)).fetchone()
@@ -31,6 +34,8 @@ def usage():
 
 
 def reserve():
+    from . import storage
+    if storage.remote_enabled(): return storage.reserve()
     connection = connect()
     try:
         connection.execute('BEGIN IMMEDIATE')
@@ -45,3 +50,5 @@ def reserve():
         raise
     finally:
         connection.close()
+
+APP_REVISION = "audit-fixes-20261104"

@@ -6,8 +6,10 @@ import pandas as pd
 
 def parameter_status(stock):
     actual = stock.get('parameter_kind') == '实际盘点'
-    confirmed = stock.get('verified') is True
-    evidence = str(stock.get('source', '')).strip()
+    flag = stock.get('verified')
+    confirmed = pd.api.types.is_bool(flag) and bool(flag)
+    source = stock.get('source','')
+    evidence = source.strip() if isinstance(source,str) else ''
     return actual and confirmed and bool(evidence) and evidence != '合成演示参数'
 
 
@@ -47,3 +49,5 @@ def compare_scenarios(metrics):
                 conclusion = '本条件存在其他取舍，需结合两项指标判断'
         rows.append(dict(scenario=scenario, fill_delta=fill_delta, inventory_delta=inventory_delta, conclusion=conclusion))
     return pd.DataFrame(rows)
+
+APP_REVISION = "audit-fixes-20261104"

@@ -111,3 +111,5 @@ def show_chart(figure, caption, height=340):
         st.plotly_chart(figure, width='stretch', theme=None, config={'displayModeBar':False})
         st.caption(caption)
 
+
+APP_REVISION = "audit-fixes-20261104"

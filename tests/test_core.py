@@ -18,7 +18,7 @@ def test_future():
  b=recommend(h,stock(),{},'2025-04-01');assert a['qty']==b['qty'];assert a['buffer']==b['buffer']
 def test_ingest():
  d=pd.DataFrame([['001','002','2025-01-01','2'],['C2','002','2025-01-01','2'],['003','002','2025-01-01','-1'],['004','002','bad','2']],columns=['order_id','sku','order_at','qty'])
- c,i,s=parse_orders(d);assert c.sku.iloc[0]=='002';assert s['valid']==1;assert len(i)==3
+ c,i,s=parse_orders(d, source="uci");assert c.sku.iloc[0]=='002';assert s['valid']==1;assert len(i)==3
  with pytest.raises(ValueError):parse_orders(d.drop(columns='qty'))
 def test_conflict():
  d=pd.DataFrame(dict(order_id=['1','1'],sku=['01','01'],order_at=['2025-01-01']*2,qty=['2','3'],line_id=['1','1']))

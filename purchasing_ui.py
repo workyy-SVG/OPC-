@@ -9,7 +9,7 @@ import streamlit as st
 
 from ui import show_chart
 from core.policy import recommend
-from core.purchasing import add_purchase, receive, project, save_workspace, load_workspace, receive_into_inventory
+from core.purchasing import add_purchase, receive, project, save_workspace, load_workspace, receive_into_inventory, effective_stock, register_purchase, workspace_path, check_workspace_source, read_workspace
 
 
 ONBOARDING_REVISION = 1
@@ -22,25 +22,79 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
     st.session_state.setdefault('purchase_workspace', uuid4().hex)
     st.session_state.setdefault('purchases', [])
     st.session_state.setdefault('stock_movements', [])
-    path = Path('outputs/purchases') / (st.session_state.purchase_workspace + '.json')
+    if st.session_state.pop('purchase_form_reset', False):
+        st.session_state.purchase_ack = False
+        st.session_state.purchase_reason = ''
+        st.session_state.purchase_request_id = uuid4().hex
+    st.session_state.setdefault('purchase_request_id', uuid4().hex)
+    path = workspace_path(st.session_state.purchase_workspace)
+    source_hash = st.session_state.get('sales_signature', st.session_state.data_hash)
 
-    def persist(ledger):
-        save_workspace(path, ledger, st.session_state.inventory, st.session_state.stock_movements)
+    def persist(ledger, updated_inventory=None):
+        inv = st.session_state.inventory if updated_inventory is None else updated_inventory
+        revision = save_workspace(path, ledger, inv, st.session_state.stock_movements, source_hash=source_hash, sales_updates=st.session_state.get("sales_updates",[]), expected_revision=st.session_state.get('workspace_revision',0))
+        st.session_state.workspace_revision = revision
         st.session_state.purchases = ledger
+        st.session_state.pipeline_semantics='external-only-v1'
+        st.session_state.inventory = inv
 
-    st.info('记录按当前会话隔离，并保存到本机。重新打开会话时请导入下载的备份；公开部署不能把本机文件当作永久存储。')
+    from core.storage import remote_enabled, StorageError
+    try:
+        remote=remote_enabled()
+    except StorageError as error:
+        st.error(str(error))
+        return
+    st.info('当前选择Supabase存储，请先测试连接；成功写入后可用恢复码跨重启恢复。' if remote else
+            '当前使用本机存储；请定期下载备份。可在同一实例用恢复码恢复，云端重建后本机文件可能丢失。')
     with st.expander('备份与恢复'):
-        st.download_button('下载采购记录备份', json.dumps(dict(schema=2, purchases=st.session_state.purchases, inventory=json.loads(st.session_state.inventory.to_json(orient='records')), movements=st.session_state.stock_movements), ensure_ascii=False, indent=2), 'purchases.json', 'application/json')
+        if remote and st.button('测试持久存储连接（不消耗AI额度）'):
+            try:
+                from core.storage import usage
+                used,remaining=usage()
+                st.success(f'数据库连接成功；今日AI已用{used}次，剩余{remaining}次。')
+            except StorageError as error:
+                st.error(str(error))
+        st.download_button('下载采购记录备份', json.dumps(dict(schema=2, pipeline_semantics='external-only-v1', source_hash=source_hash, sales_updates=st.session_state.get("sales_updates",[]), purchases=st.session_state.purchases, inventory=json.loads(st.session_state.inventory.to_json(orient='records')), movements=st.session_state.stock_movements), ensure_ascii=False, indent=2), 'purchases.json', 'application/json')
+        st.caption('工作区恢复码仅限本人保管，拥有此码可恢复对应业务记录。使用本机存储时，仅在磁盘保留时可恢复。')
+        st.code(st.session_state.purchase_workspace, language=None)
+        recovery = st.text_input('已有工作区恢复码',type='password')
+        if st.button('恢复工作区',disabled=not recovery):
+            try:
+                raw = read_workspace(recovery.strip())
+                payload = json.loads(raw)
+                check_workspace_source(payload,source_hash)
+                ledger,inv,movements = load_workspace(raw)
+                if set(inv.sku) != set(inventory.sku): raise ValueError('商品集合不一致')
+                st.session_state.purchases=ledger
+                st.session_state.inventory=inv
+                st.session_state.stock_movements=movements
+                st.session_state.sales_updates=payload.get('sales_updates',[])
+                st.session_state.pipeline_semantics='external-only-v1'
+                st.session_state.purchase_workspace=recovery.strip()
+                st.session_state.workspace_revision=payload.get('revision',0)
+                st.session_state.purchase_form_reset=True
+                st.session_state.pop('ai_purchase_draft',None)
+                st.rerun()
+            except (ValueError,TypeError,KeyError,OSError):
+                st.error('无法恢复：请核对恢复码、销售数据和本机存储是否仍存在。')
         backup = st.file_uploader('恢复采购备份', type=['json'])
+        allow_legacy = st.checkbox('兼容旧备份：已核对来源与覆盖范围，外部在途不含台账采购')
         if st.button('应用采购备份', disabled=backup is None):
             try:
+                payload=json.loads(backup.getvalue())
+                check_workspace_source(payload,source_hash,allow_legacy)
                 ledger, restored_inventory, movements = load_workspace(backup.getvalue())
                 if set(restored_inventory.sku) != set(inventory.sku):
                     raise ValueError('备份商品与当前库存不一致，请先加载对应销售数据')
-                save_workspace(path, ledger, restored_inventory, movements)
+                revision = save_workspace(path, ledger, restored_inventory, movements, source_hash=source_hash, sales_updates=payload.get("sales_updates",[]), expected_revision=st.session_state.get('workspace_revision',0))
+                st.session_state.workspace_revision = revision
                 st.session_state.purchases = ledger
+                st.session_state.pipeline_semantics='external-only-v1'
                 st.session_state.inventory = restored_inventory
                 st.session_state.stock_movements = movements
+                st.session_state.sales_updates = payload.get('sales_updates',[])
+                st.session_state.purchase_form_reset=True
+                st.session_state.pop('ai_purchase_draft',None)
                 st.rerun()
                 st.success('采购备份已恢复')
             except (ValueError, TypeError, KeyError, OSError) as error:
@@ -51,16 +105,15 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
 
     sku = st.selectbox('采购商品', inventory.sku.tolist(), format_func=product_label)
     stock = inventory.set_index('sku').loc[sku].to_dict() | {'sku': sku}
+    try:
+        from core.inventory import parse_inventory
+        parse_inventory(pd.DataFrame([stock]), inventory.columns)
+    except (ValueError, TypeError, KeyError):
+        st.error('库存配置存在无效数量或日期，请先返回库存配置修正。')
+        return
     history = daily[daily.sku == sku]
-    related = [r for r in st.session_state.purchases if r['sku'] == sku]
-    recommendation_stock = dict(stock)
-    if related:
-        pending_orders = [(r, r['qty'] - sum(x['qty'] for x in r['receipts'])) for r in related]
-        recommendation_stock['on_order'] = sum(q for r, q in pending_orders)
-        recommendation_stock['arrival_confirmed'] = bool(stock['arrival_confirmed']) and all(
-            as_of <= pd.Timestamp(r['expected_at']) <= as_of + pd.Timedelta(days=int(stock['lead_days']))
-            for r, q in pending_orders if q > 0)
-        st.caption('本页建议使用台账剩余在途替代汇总在途；逾期或超出采购交期的未到货订单转人工复核。请确认台账完整。')
+    recommendation_stock = effective_stock(stock, st.session_state.purchases, as_of)
+    st.caption('建议统一使用：外部在途 + 本项目采购剩余在途；逾期或超交期的明细需人工复核。')
     recommendation = recommend(history, recommendation_stock, {'require_actual': require_actual}, as_of)
     suggested = recommendation['qty']
     st.write('当前规则建议：' + (str(suggested) + '件' if suggested is not None else '需人工复核'))
@@ -68,14 +121,19 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
         qty = st.number_input('确认采购数量（件）', min_value=1, value=max(1, int(suggested or 1)), step=1)
         ordered = st.date_input('采购日期', value=as_of.date())
         expected = st.date_input('预计到货日期', value=(as_of + pd.Timedelta(days=int(stock['lead_days']))).date())
-        reason = st.text_input('确认或修改原因', placeholder='例如：每箱件数、预算调整、人工复核依据')
-        acknowledged = st.checkbox('我已核对库存、已有采购及供应商条件，确认登记此笔采购')
+        reason = st.text_input('确认或修改原因', key='purchase_reason', placeholder='例如：每箱件数、预算调整、人工复核依据')
+        acknowledged = st.checkbox('我已核对库存、已有采购及供应商条件，确认登记此笔采购', key='purchase_ack')
+        external = st.checkbox('这是外部汇总在途的明细化登记（不新增在途总量）')
         if st.form_submit_button('登记确认采购'):
             try:
                 if not acknowledged:
                     raise ValueError('请先核对并确认采购条件')
-                persist(add_purchase(st.session_state.purchases, sku, qty, ordered, expected, reason, suggested))
-                st.success('已保存采购记录')
+                ledger, inv = register_purchase(st.session_state.purchases, st.session_state.inventory,
+                    sku, qty, ordered, expected, reason, st.session_state.purchase_request_id, external, suggested)
+                persist(ledger, inv)
+                st.session_state.purchase_form_reset = True
+                st.session_state.receipt_notice = '采购已保存，已刷新在途和建议；再次采购请重新填写并确认。'
+                st.rerun()
             except (ValueError, TypeError, OSError) as error:
                 st.error(str(error))
 
@@ -107,8 +165,10 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
                         ledger, updated_inventory, movements = receive_into_inventory(
                             records, st.session_state.inventory, st.session_state.stock_movements,
                             chosen, quantity, date, receipt_id)
-                        save_workspace(path, ledger, updated_inventory, movements)
+                        revision = save_workspace(path, ledger, updated_inventory, movements, source_hash=source_hash, sales_updates=st.session_state.get("sales_updates",[]), expected_revision=st.session_state.get('workspace_revision',0))
+                        st.session_state.workspace_revision = revision
                         st.session_state.purchases = ledger
+                        st.session_state.pipeline_semantics='external-only-v1'
                         st.session_state.inventory = updated_inventory
                         st.session_state.stock_movements = movements
                         st.session_state['receipt_notice'] = '到货已入账，现货已自动增加，库存流水已保存。相同凭证重复提交不会再次入库。'
@@ -118,6 +178,9 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
 
     if 'receipt_notice' in st.session_state:
         st.success(st.session_state.pop('receipt_notice'))
+    if st.session_state.get('sales_updates'):
+        with st.expander('销售更新与库存扣减记录'):
+            st.dataframe(pd.DataFrame(st.session_state.sales_updates),hide_index=True)
     if st.session_state.stock_movements:
         st.subheader('收货库存流水')
         st.dataframe(pd.DataFrame(st.session_state.stock_movements).rename(columns={
@@ -139,12 +202,13 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
         projection, overdue = project(st.session_state.purchases, sku, opening, start, recent.mean(), accounted_receipts={m['receipt_id'] for m in st.session_state.stock_movements})
         if overdue:
             st.warning(f'有{overdue}件采购已逾期未登记到货，未假定今天自动到货，请联系供应商核实。')
-        if float(stock['on_order']) > 0:
-            st.warning('库存配置还有汇总在途，请核对是否已逐笔登记；未登记部分不会计入此预测。')
+        external_pending = float(stock['on_order']) > 0
+        if external_pending:
+            st.warning('外部汇总在途缺少到货日期，风险表只包含已登记明细。请使用明细化登记后再判断全部库存风险。')
         shortages = projection[projection.shortage > 0]
         if not shortages.empty:
             st.warning('预计首次缺货：' + shortages.iloc[0]['date'] + '，请核对采购到货安排。')
-        else:
+        elif not external_pending:
             st.success('当前假设下，未来14天未预测到缺货。')
         risk = projection.rename(columns={'date':'日期','arrival':'当日到货','demand':'预计销量',
                                           'ending_stock':'预计期末现货','shortage':'预计未满足需求'})
@@ -158,3 +222,5 @@ def render(daily, inventory, as_of, require_actual=False, product_label=str):
         show_chart(figure, '橙色圆点表示预计有需求无法满足的日期。悬停可查看缺口及到货信息。')
         st.dataframe(risk, hide_index=True)
         st.caption('这是固定日均需求下的模拟；未包含波动缓冲、缺货失销量、保质期和资金约束。确认收货自动更新现货；跨日销售和盘点仍需核对。')
+
+APP_REVISION = "audit-fixes-20261104"

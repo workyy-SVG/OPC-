@@ -105,3 +105,5 @@ def report(state):
 
 def export_json(state):
     return json.dumps(dict(state, summary=report(state)), ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
+
+APP_REVISION = "audit-fixes-20261104"

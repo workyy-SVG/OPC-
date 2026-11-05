@@ -107,3 +107,37 @@ finally:
         meta=json.loads(archive.read('manifest.json'))
         assert meta['active_count']==int(test_demand>0)
         assert meta['data_hash']=='zero-demand-test'
+
+
+def test_rolling_windows_are_fixed_and_failures_are_retained(monkeypatch):
+    calls=[]
+    def run(daily,end,target):
+        calls.append((pd.Timestamp(end),daily.date.max()))
+        if len(calls)==1:raise ValueError('历史不足')
+        return {'test':str(end)}
+    monkeypatch.setattr(study,'run_holdout_study',run)
+    daily=pd.DataFrame({'date':pd.date_range('2025-01-01','2025-05-31')})
+    result=study.run_rolling_holdout(daily,'2025-05-31',.9,3)
+    assert len(result)==3 and result[0]['error']=='历史不足'
+    assert result[0]['result'] is None and result[-1]['result'] is not None
+    assert all(end==max_date for end,max_date in calls)
+    assert (calls[1][0]-calls[0][0]).days==30
+    assert (calls[2][0]-calls[1][0]).days==30
+
+
+def test_cached_holdout_reuses_only_identical_data_and_settings(monkeypatch):
+    import holdout_ui
+    calls=[]
+    def run(daily,end,target):
+        calls.append(1)
+        return {'total':int(daily.sold_qty.sum()),'target':target}
+    monkeypatch.setattr(holdout_ui,'run_holdout_study',run)
+    holdout_ui.cached_holdout.clear()
+    daily=pd.DataFrame({'sold_qty':[1]})
+    first=holdout_ui.cached_holdout(daily,'2025-05-31',.9,'test-version')
+    assert holdout_ui.cached_holdout(daily,'2025-05-31',.9,'test-version')==first
+    assert len(calls)==1
+    holdout_ui.cached_holdout(daily.assign(sold_qty=2),'2025-05-31',.9,'test-version')
+    holdout_ui.cached_holdout(daily,'2025-05-31',.95,'test-version')
+    assert len(calls)==3
+    holdout_ui.cached_holdout.clear()

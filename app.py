@@ -1,6 +1,14 @@
 from pathlib import Path
+from uuid import uuid4
 import hashlib,json,io,zipfile
-from importlib import reload
+from importlib import reload, import_module
+# Refresh cached modules in dependency order after a hot deployment.
+# Current modules carry this release marker, so ordinary reruns and test mocks
+# are preserved; only older cached implementations are reloaded.
+for _module_name in ['core.numbers', 'core.storage', 'core.purchasing', 'core.inventory', 'core.ingest', 'core.policy', 'core.replay', 'core.validation', 'core.sales_update', 'core.study', 'core.holdout_study', 'core.simulation', 'core.ai_quota', 'core.ai', 'ui', 'results_ui', 'page_help', 'ai_ui', 'purchasing_ui', 'simulation_ui', 'holdout_ui']:
+    _module = import_module(_module_name)
+    if getattr(_module,'APP_REVISION',None) != 'audit-fixes-20261104':
+        reload(_module)
 import ai_ui
 import page_help
 import purchasing_ui
@@ -28,6 +36,7 @@ import plotly.express as px
 from core.ingest import parse_orders
 from core.demand import build_daily
 from core.policy import recommend, VERSION
+from core.purchasing import effective_stock, workspace_path
 from core.inventory import parse_inventory
 from core.replay import run_replay
 from core.export import csv_bytes
@@ -124,7 +133,7 @@ with st.sidebar:
     st.caption('各功能页顶部都有用途和衔接说明。使用指南提供路线图和互动算例。')
     with st.container(key='ai_quota_panel'):
         ai_budget_sidebar()
-LABELS={'order_id':'订单编号','sku':'商品编码','order_at':'销售日期','qty':'数量（件）','line_id':'订单行编号','status':'处理状态','on_hand':'现货数量（件）','on_order':'在途数量（件）','as_of':'库存快照日期','lead_days':'采购提前期（天）','pack_size':'每箱件数','min_order':'最小起订量（件）','arrival_confirmed':'确认在途按期到货','source':'参数来源','row_no':'原文件行号','reason_code':'问题类型','hint':'修正建议','policy':'补货策略','date':'日期','demand':'需求代理（件）','arrived':'当日到货（件）','order':'当日下单（件）','ending_stock':'期末现货（件）','shortage':'未满足需求（件）','review':'是否人工复核','fill_rate':'件数满足率','mean_stock':'平均期末库存（件）','stockout_rate':'缺货天数占比','review_rate':'人工复核率','orders':'下单次数','final_pipeline':'期末在途（件）','common_eligible_rate':'双方可自动建议日期占比','inventory_position':'库存位置（件）','forecast_lead':'交期内预测需求（件）','buffer':'误差缓冲（件）','target':'目标库存（件）','mean':'近28日日均销量','protection_days':'保护期（天）','window_start':'历史窗口起始日','window_end':'历史窗口结束日','sample_count':'有效历史天数','error_samples':'误差窗口数量','rule_version':'规则版本','run_id':'运行编号','reason_codes':'复核原因'}
+LABELS={'order_id':'订单编号','sku':'商品编码','order_at':'销售日期','qty':'数量（件）','line_id':'订单行编号','status':'处理状态','on_hand':'现货数量（件）','on_order':'外部在途（不含台账采购）','as_of':'库存快照日期','lead_days':'采购提前期（天）','pack_size':'每箱件数','min_order':'最小起订量（件）','arrival_confirmed':'确认在途按期到货','source':'参数来源','row_no':'原文件行号','reason_code':'问题类型','hint':'修正建议','policy':'补货策略','date':'日期','demand':'需求代理（件）','arrived':'当日到货（件）','order':'当日下单（件）','ending_stock':'期末现货（件）','shortage':'未满足需求（件）','review':'是否人工复核','fill_rate':'件数满足率','mean_stock':'平均期末库存（件）','stockout_rate':'缺货天数占比','review_rate':'人工复核率','orders':'下单次数','final_pipeline':'期末在途（件）','common_eligible_rate':'双方可自动建议日期占比','inventory_position':'库存位置（件）','forecast_lead':'交期内预测需求（件）','buffer':'误差缓冲（件）','target':'目标库存（件）','mean':'近28日日均销量','protection_days':'保护期（天）','window_start':'历史窗口起始日','window_end':'历史窗口结束日','sample_count':'有效历史天数','error_samples':'误差窗口数量','rule_version':'规则版本','run_id':'运行编号','reason_codes':'复核原因'}
 REASONS={'INVALID_FIELD':'必填内容缺失、日期格式不匹配或数量不是整数','CONFLICTING_LINE_ID':'同一订单行编号对应不同内容，请核对原订单','DUPLICATE_LINE':'重复订单行，已剔除','CANCELLED':'取消订单，不计入销量','RETURN':'退货单独统计，不冲减需求','NOT_COMPLETED':'未完成或零数量订单，不计入销量','NON_PRODUCT':'非商品记录，已排除','SUSPECT_DUPLICATE':'疑似重复但缺少行编号，保留并请人工核对','HISTORY_GAP':'最近28天覆盖不完整，请补齐销售记录并确认覆盖','INSUFFICIENT_ERROR_WINDOWS':'完整误差窗口不足20个，请增加更早的销售历史','ARRIVAL_UNCONFIRMED':'在途到货时间尚未确认，请在库存配置中核对','SNAPSHOT_DATE_MISMATCH':'库存日期与决策日期不一致，请更新库存快照','MISSING_STOCK':'缺少该商品库存，请导入库存配置'}
 def reason_text(code):
     if code=='UNVERIFIED_PARAMETERS': return '尚未确认实际盘点参数：请填写真实来源、选择实际盘点并逐项核实。'
@@ -149,24 +158,57 @@ def download(label,df,name): st.download_button(label,csv_bytes(df),name,'text/c
 DEMO_RANGE = (pd.Timestamp('2010-01-01').date(), pd.Timestamp('2010-06-30').date())
 DEMO_SOURCE = '英国零售公开样本'
 
-def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source):
+def save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source, preserve=False, allow_revision=False):
     data_hash = hashlib.sha256(raw).hexdigest()
+    signature = hashlib.sha256(daily.sort_values(['sku','date']).to_csv(index=False).encode()).hexdigest()
     previous = st.session_state.get('daily')
-    if previous is None or st.session_state.get('data_hash') != data_hash or not previous.equals(daily):
-        for key in ('inventory', 'replay_result', 'scenario_result', 'study', 'holdout_result', 'simulation',
-                    'purchases', 'purchase_workspace', 'stock_movements', 'receipt_notice',
-                    'ai_purchase_draft', 'ai_explanation'):
-            st.session_state.pop(key, None)
+    changed = previous is None or st.session_state.get('data_hash') != data_hash or not previous.equals(daily)
+    if changed and preserve and previous is not None:
+        if st.session_state.get('is_demo') != is_demo:
+            raise ValueError('示例与真实数据不能混合更新，请选择新建工作区')
+        if 'inventory' in st.session_state:
+            from core.sales_update import update_stock
+            from core.purchasing import save_workspace
+            inventory, updates = update_stock(previous, daily, st.session_state.inventory, allow_revision)
+            history = st.session_state.get('sales_updates', []) + updates
+            st.session_state.setdefault('purchase_workspace',uuid4().hex)
+            if 'purchase_workspace' in st.session_state:
+                path = workspace_path(st.session_state.purchase_workspace)
+                revision = save_workspace(path, st.session_state.get('purchases',[]), inventory,
+                    st.session_state.get('stock_movements',[]), source_hash=signature, sales_updates=history, expected_revision=st.session_state.get('workspace_revision',0))
+                st.session_state.workspace_revision = revision
+            st.session_state.inventory = inventory
+            st.session_state.sales_updates = history
+    if changed:
+        transient = ['replay_result','scenario_result','study','holdout_result','rolling_result','simulation','ai_purchase_draft','ai_explanation']
+        if not preserve:
+            transient += ['inventory','purchases','purchase_workspace','stock_movements','receipt_notice','sales_updates',
+                          'purchase_request_id','purchase_ack','purchase_reason','workspace_revision','pipeline_semantics']
+        for key in transient:
+            st.session_state.pop(key,None)
     names = {sku: f'样本商品 {i:02d}' for i, sku in enumerate(sorted(daily.sku.unique()), 1)} if is_demo else {}
     if 'description' in clean:
         named = clean[clean.description.astype(str).str.strip().ne('')].drop_duplicates('sku')
         names.update(named.set_index('sku').description.to_dict())
-    st.session_state.update(raw=raw, daily=daily, issues=issues, summary=summary, data_hash=data_hash,
+    st.session_state.update(raw=raw, daily=daily, issues=issues, summary=summary, data_hash=data_hash, sales_signature=signature,
                             product_names=names, sales_source=source, coverage=coverage, is_demo=is_demo)
+
+def apply_inventory(candidate):
+    from core.purchasing import save_workspace
+    normalized = parse_inventory(candidate, candidate.columns)
+    normalized['verified'] = candidate['verified'].map(lambda value: pd.api.types.is_bool(value) and bool(value))
+    st.session_state.setdefault('purchase_workspace',uuid4().hex)
+    if 'purchase_workspace' in st.session_state:
+        revision = save_workspace(workspace_path(st.session_state.purchase_workspace),st.session_state.get('purchases',[]),
+            normalized,st.session_state.get('stock_movements',[]),source_hash=st.session_state.get('sales_signature'),
+            sales_updates=st.session_state.get('sales_updates',[]),expected_revision=st.session_state.get('workspace_revision',0))
+        st.session_state.workspace_revision = revision
+    st.session_state.inventory = normalized
+
 
 def quick_demo(target='补货清单'):
     raw = Path('data/demo/orders.csv').read_bytes()
-    clean, issues, summary = parse_orders(pd.read_csv(io.BytesIO(raw), dtype=str))
+    clean, issues, summary = parse_orders(pd.read_csv(io.BytesIO(raw), dtype=str), source="uci")
     daily = build_daily(clean, pd.date_range(*DEMO_RANGE))
     save_sales(raw, clean, issues, summary, daily, DEMO_RANGE, True, DEMO_SOURCE)
     cancel_actual_mode()
@@ -241,7 +283,9 @@ elif page=='导入与质检':
         st.session_state.open_sales_import = False
     if not ready or st.toggle('重新导入', key='open_sales_import'):
         if ready:
-            st.caption('更换数据会开启新的库存、采购台账和实验记录。需要保留时请先下载备份。')
+            import_mode = st.radio('本次销售导入方式', ['更新当前店铺（完整快照，保留采购库存）','新建工作区（替换全部业务记录）'], key='sales_import_mode')
+            st.caption('更新模式仅扣减库存日期之后的新销售；重复快照不会重复扣减。历史修订须先对账。新建工作区前请下载备份。')
+            allow_revision = st.checkbox('我已完成实际盘点核实，允许对账修订盘点日前的销售（不重复扣库存）')
         section('第一步 · 选择销售数据','上传销售 CSV，或用加州大学欧文分校（UCI）公开的英国零售交易样本。')
         with st.expander('我的表格需要包含哪些字段？'):
             st.markdown('**必填**　订单编号、商品编码、销售日期、销售数量。**选填**　商品名称、订单行编号、单价和订单状态。')
@@ -285,6 +329,17 @@ elif page=='导入与质检':
                 name_column = st.selectbox('商品名称列（选填）', [None, *remaining],
                                            index=remaining.index(preferred) + 1 if preferred else 0,
                                            format_func=lambda col: '暂不填写' if col is None else col)
+                optional_mapping = {}
+                used_optional = {name_column} if name_column else set()
+                for field, title, aliases in [('status','订单状态列（选填）',('status','订单状态','处理状态','交易状态')),
+                                               ('line_id','订单行编号列（选填）',('line_id','订单行编号','行编号'))]:
+                    options = [column for column in remaining if column not in used_optional]
+                    preferred_optional = next((column for column in aliases if column in options),None)
+                    column = st.selectbox(title,[None,*options],index=options.index(preferred_optional)+1 if preferred_optional else 0,
+                        format_func=lambda value:'暂不填写' if value is None else value)
+                    if column:
+                        optional_mapping[column]=field
+                        used_optional.add(column)
                 formats = {'%Y-%m-%d':'年-月-日，例如 2025-01-31', '%d/%m/%Y':'日/月/年，例如 31/01/2025',
                            '%m/%d/%Y':'月/日/年，例如 01/31/2025', '%Y-%m-%d %H:%M:%S':'年-月-日 时:分:秒，例如 2025-01-31 09:30:00'}
                 fmt = st.selectbox('日期格式', list(formats), format_func=formats.get)
@@ -294,6 +349,12 @@ elif page=='导入与质检':
                 defaults = DEMO_RANGE if is_demo else (dates.min().date(), dates.max().date()) if not dates.empty else (today, today)
                 section('第三步 · 确认销售记录覆盖日期','只选已经完整导出的日期。所选范围内，没记录的日期按零销量处理。')
                 coverage = date_range('已完整覆盖的营业日期区间', value=defaults)
+                valid_dates = pd.to_datetime(df[date_col],format=fmt,errors='coerce') if date_col else pd.Series(dtype='datetime64[ns]')
+                outside_count = int((valid_dates.notna() & ~valid_dates.between(pd.Timestamp(coverage[0]),pd.Timestamp(coverage[1]))).sum())
+                allow_outside = False
+                if outside_count:
+                    st.warning(f'{outside_count}条记录在所选日期区间外，不会进入该区间销量计算。')
+                    allow_outside = st.checkbox('我确认排除区间外记录，仅使用选定覆盖日期',key='allow_outside_'+hashlib.sha256(raw).hexdigest()[:16])
                 confirmed = st.checkbox('这些日期都已完整导出', key='sales_coverage_confirmed',
                                         help='如果有一天漏导出，请补齐文件或缩短范围，以免被算成零销量。')
                 if st.button('核验并使用此数据', disabled=not confirmed):
@@ -305,13 +366,18 @@ elif page=='导入与质检':
                             source_rows = df.drop(columns='description')
                         if name_column is not None:
                             mapping[name_column] = 'description'
+                        mapping.update(optional_mapping)
                         if source_rows.rename(columns=mapping).columns.duplicated().any():
                             raise ValueError('所选字段与文件中的标准列名冲突，请调整列名或字段匹配。')
-                        clean, issues, summary = parse_orders(source_rows, mapping, fmt)
+                        clean, issues, summary = parse_orders(source_rows, mapping, fmt, source="uci" if is_demo else "generic")
                         daily = build_daily(clean, pd.date_range(*coverage))
                         if daily.empty and ready:
                             raise ValueError('新文件没有可用的销售记录，已保留当前数据。')
-                        save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source)
+                        outside = clean[~clean.order_at.between(pd.Timestamp(coverage[0]),pd.Timestamp(coverage[1]))]
+                        if len(outside) and not allow_outside:
+                            raise ValueError(f'有{len(outside)}条有效销售在覆盖区间外，请调整日期或明确允许排除')
+                        save_sales(raw, clean, issues, summary, daily, coverage, is_demo, source,
+                                   preserve=ready and import_mode.startswith('更新'), allow_revision=ready and allow_revision)
                         st.session_state.sales_import_finished = True
                         st.rerun()
                     except (ValueError, TypeError, KeyError) as error:
@@ -465,6 +531,15 @@ else:
     as_of=daily[daily.coverage_status=='confirmed'].date.max()+pd.Timedelta(days=1)
     if 'inventory' not in st.session_state and page!='模拟经营':
         st.session_state.inventory=pd.DataFrame([dict(sku=s,as_of=str(as_of.date()),on_hand=10,on_order=0,lead_days=3,pack_size=6,min_order=0,arrival_confirmed=True,source='合成演示参数',parameter_kind='演示假设',verified=False) for s in daily.sku.unique()])
+    if st.session_state.get('purchases') and st.session_state.get('pipeline_semantics')!='external-only-v1' and page in ('库存配置','采购与到货','补货清单'):
+        st.warning('当前会话含升级前采购记录。新版库存中的外部在途不能重复包含台账采购，请先逐商品核对，再确认新口径。')
+        confirmed_semantics=st.checkbox('我已核对所有商品的外部在途，不包含本项目采购台账数量')
+        if st.button('确认升级在途口径',disabled=not confirmed_semantics):
+            st.session_state.pipeline_semantics='external-only-v1'
+            st.rerun()
+        if page!='库存配置':
+            st.button('先去库存配置核对',on_click=navigate,args=('库存配置',))
+            st.stop()
     if page=='模拟经营':
         simulation_ui.render(daily, product_label=product_label)
     elif page=='采购与到货':
@@ -485,11 +560,11 @@ else:
         f=st.file_uploader('批量导入库存 CSV',type='csv')
         if f and st.button('应用库存文件'):
             try:
-                inv=pd.read_csv(f,dtype=str,keep_default_na=False).rename(columns={v:k for k,v in LABELS.items()})
+                inv=pd.read_csv(f,dtype=str,keep_default_na=False).rename(columns=({'在途数量（件）':'on_order'} | {v:k for k,v in LABELS.items()}))
                 inv=parse_inventory(inv,template.columns)
-                st.session_state.inventory=inv
+                apply_inventory(inv)
                 st.info('导入参数均已重置为未确认，请逐商品核对来源后保存。')
-            except (ValueError, KeyError) as e: st.error(str(e))
+            except (ValueError, KeyError, OSError) as e: st.error(str(e))
         with st.expander('批量设置交期与每箱件数'):
             with st.form('bulk_stock'):
                 selected_skus=st.multiselect('选择同一供应商或采购条件的商品',st.session_state.inventory.sku.tolist(),format_func=product_label)
@@ -497,11 +572,16 @@ else:
                 bulk_pack=st.number_input('统一每箱件数',1,10000,6)
                 st.caption('只应用于所选商品；变更后需重新核实采购参数。')
                 if st.form_submit_button('应用到所选商品'):
-                    mask=st.session_state.inventory.sku.isin(selected_skus)
-                    st.session_state.inventory.loc[mask,'lead_days']=bulk_lead
-                    st.session_state.inventory.loc[mask,'pack_size']=bulk_pack
-                    st.session_state.inventory.loc[mask,'verified']=False
-                    st.success(f'已更新 {int(mask.sum())} 个商品，请重新核实参数。')
+                    try:
+                        candidate=st.session_state.inventory.copy(deep=True)
+                        mask=candidate.sku.isin(selected_skus)
+                        candidate.loc[mask,'lead_days']=bulk_lead
+                        candidate.loc[mask,'pack_size']=bulk_pack
+                        candidate.loc[mask,'verified']=False
+                        apply_inventory(candidate)
+                        st.success(f'已更新 {int(mask.sum())} 个商品，请重新核实参数。')
+                    except (ValueError,TypeError,OSError) as error:
+                        st.error('未保存：'+str(error))
         chosen=st.selectbox('选择要修改的商品',st.session_state.inventory.sku.tolist(),format_func=product_label)
         idx=st.session_state.inventory.index[st.session_state.inventory.sku==chosen][0]
         row=st.session_state.inventory.loc[idx].to_dict()
@@ -517,8 +597,13 @@ else:
             changes['verified']=st.checkbox('我已对照当日盘点和采购凭据核实以上全部参数',value=False)
             st.caption('实际来源示例：盘点表编号、盘点日期、供应商报价单编号。勾选只是用户声明，不是第三方验证。')
             if st.form_submit_button('保存该商品配置',type='primary'):
-                for k,v in changes.items(): st.session_state.inventory.loc[idx,k]=v
-                st.success('已保存。进入补货清单即可查看更新后的建议。')
+                try:
+                    candidate = st.session_state.inventory.copy(deep=True)
+                    for k,v in changes.items(): candidate.loc[idx,k]=v
+                    apply_inventory(candidate)
+                    st.success('已保存。进入补货清单即可查看更新后的建议。')
+                except (ValueError, TypeError, OSError) as error:
+                    st.error('未保存：' + str(error))
         inventory = st.session_state.inventory
         inventory_chart(inventory)
         inventory_view = inventory.assign(商品名称=inventory.sku.map(st.session_state.get('product_names', {})))
@@ -529,7 +614,7 @@ else:
         st.caption('每次进入本页均按当前库存重新计算。请先核对参数来源，再导出清单。')
         if usage_mode == '演示探索' and st.session_state.get('is_demo'):
             st.caption('示例默认每种商品只有 10 件现货。热销商品的建议件数可能较大。真实采购请先核对现货和交期。')
-        decisions=[recommend(g,st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, {'require_actual':usage_mode=='实际采购准备'},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
+        decisions=[recommend(g,effective_stock(st.session_state.inventory.set_index('sku').loc[sku].to_dict()|{'sku':sku}, st.session_state.get('purchases', []), as_of), {'require_actual':usage_mode=='实际采购准备'},as_of) if sku in set(st.session_state.inventory.sku) else dict(sku=sku,status='人工复核',qty=None,reason_codes=['MISSING_STOCK']) for sku,g in daily.groupby('sku')]
         out=pd.DataFrame(decisions)
         unverified = sum('UNVERIFIED_PARAMETERS' in r['reason_codes'] or 'MISSING_STOCK' in r['reason_codes']
                          for r in decisions)

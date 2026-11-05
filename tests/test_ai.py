@@ -91,7 +91,7 @@ def test_no_key_manual_page_still_works(monkeypatch):
 
 def test_ai_draft_page_never_writes_without_confirmation(monkeypatch):
     monkeypatch.setattr('ai_ui.configured', lambda provider: True)
-    monkeypatch.setattr('ai_ui.purchase_draft', lambda text,skus,*a: [dict(sku=skus[0],qty=12,expected_at='2010-07-04',note='箱规明确')])
+    monkeypatch.setattr('ai_ui.purchase_draft', lambda text,skus,*a,**kwargs: [dict(sku=skus[0],qty=12,expected_at='2010-07-04',note='箱规明确')])
     app=AppTest.from_file(Path(__file__).resolve().parents[1]/'app.py',default_timeout=60).run()
     next(b for b in app.button if b.label=='用示例立即体验').click().run()
     app.radio(key='navigation').set_value('采购与到货').run()

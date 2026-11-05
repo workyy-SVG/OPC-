@@ -52,3 +52,5 @@ def run_study(daily,config,ratios=(.1,.2,.3,.4,.5,.6),scales=(.6,1,1.4,1.8),hold
         for (policy,param),g in q.groupby(['policy','parameter']):
             costs.append(dict(shortage_holding_ratio=ratio,policy=policy,parameter=param,cost=g.scenario_cost.sum()))
     return dict(per_sku=per,summary=summary,equal_inventory=pd.DataFrame(comparisons),oracle=oracle,cost_scan=pd.DataFrame(costs),ci=ci)
+
+APP_REVISION = "audit-fixes-20261104"

@@ -6,7 +6,7 @@ from core.ingest import parse_orders
 from core.demand import build_daily
 from core.study import run_study
 raw=pd.read_csv('data/demo/orders.csv',dtype=str)
-c,issues,summary=parse_orders(raw)
+c,issues,summary=parse_orders(raw, source="uci")
 d=build_daily(c,pd.date_range('2010-01-01','2010-06-30'))
 skus=['21212','21977','85099B']
 cfg=dict(start='2010-06-01',end='2010-06-30',lead_days=3,initial_stock=20)

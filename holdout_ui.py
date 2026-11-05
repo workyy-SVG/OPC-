@@ -10,11 +10,17 @@ import streamlit as st
 from core.export import csv_bytes
 from core.holdout_study import (
     GRIDS, LEAD_DAYS, MAX_PRODUCTS, MIN_CALIBRATION_UNITS, MIN_SELLING_DAYS,
-    PACK_SIZE, PERIOD_DAYS, QUANTILE, WARMUP_DAYS, WINDOW, experiment_periods, run_holdout_study,
+    PACK_SIZE, PERIOD_DAYS, QUANTILE, WARMUP_DAYS, WINDOW, experiment_periods, run_holdout_study, run_rolling_holdout,
 )
 from core.policy import VERSION
 from results_ui import COLORS, POLICIES
 from ui import show_chart
+
+
+@st.cache_data(ttl=600, max_entries=8, show_spinner=False)
+def cached_holdout(daily, end, target, configuration):
+    # DataFrame content and explicit rule/grid version participate in the key.
+    return run_holdout_study(daily, end, target)
 
 
 def render(daily, product_label):
@@ -43,9 +49,10 @@ def render(daily, product_label):
     if st.button('运行留出期对照', type='primary'):
         with st.spinner('正在用较早的销售记录选参，再检验留出期…'):
             try:
-                st.session_state.holdout_result = run_holdout_study(daily, end, target)
+                st.session_state.holdout_result = cached_holdout(daily, end, target, json.dumps([VERSION,GRIDS,WINDOW,LEAD_DAYS,PACK_SIZE,QUANTILE,WARMUP_DAYS],sort_keys=True))
             except ValueError as error:
                 st.error(str(error))
+    _rolling_ui(daily,end,target)
     result = st.session_state.get('holdout_result')
     if result is None:
         return
@@ -144,3 +151,48 @@ def _download(result):
             archive.writestr(key + '.csv', csv_bytes(result[key]))
         archive.writestr('manifest.json', json.dumps(meta, ensure_ascii=False, indent=2))
     st.download_button('下载留出期对照报告', buffer.getvalue(), 'holdout-comparison.zip', 'application/zip')
+
+APP_REVISION = "audit-fixes-20261104"
+
+
+@st.cache_data(ttl=600,max_entries=4,show_spinner=False)
+def cached_rolling(daily,end,target,windows,configuration):
+    return run_rolling_holdout(daily,end,target,windows)
+
+
+def _rolling_ui(daily,end,target):
+    with st.expander('滚动留出稳健性：固定多个区间复核'):
+        st.caption('运行前固定窗口数与目标。连续取不重叠的30天留出期，每期独立使用更早30天选参；保留未达标、零销量和历史不足的所有区间。不得看结果后挑窗口宣称普遍优势。')
+        windows=st.selectbox('预先固定留出窗口数',[2,3],index=1)
+        if st.button('运行滚动留出复核'):
+            with st.spinner('正在逐区间选参并复核…'):
+                result=cached_rolling(daily,end,target,windows,json.dumps([VERSION,GRIDS],sort_keys=True))
+                st.session_state.rolling_result=dict(result=result,end=str(end),target=target,windows=windows,
+                    data_hash=st.session_state.data_hash)
+        saved=st.session_state.get('rolling_result')
+        if not saved: return
+        if (saved['end'],saved['target'],saved['windows'])!=(str(end),target,windows):
+            st.info('下方为上次固定配置的结果，请重新运行应用当前设置。')
+        rows=[];buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+            metadata=[]
+            for index,item in enumerate(saved['result'],1):
+                result=item['result']
+                meta=dict(calibration=item['calibration'],test=item['test'],error=item['error'])
+                if result is None:
+                    rows.append({'留出期':' 至 '.join(item['test']),'方法':'—','满足率':'不适用','平均现货':'不适用','状态':item['error']})
+                else:
+                    meta.update(cohort=result['cohort'],active_count=result['active_count'])
+                    for record in result['summary'].to_dict('records'):
+                        active=bool(result['active_count'])
+                        rows.append({'留出期':' 至 '.join(item['test']),'方法':POLICIES[record['policy']],
+                            '满足率':f"{record['fill_rate_test']:.2%}" if active else '不适用',
+                            '平均现货':round(record['mean_stock_test'],2) if active else '不适用',
+                            '状态':('达标' if record['test_met'] else '未达标') if active else '零需求'})
+                    for key in ('summary','details','candidates'):
+                        archive.writestr(f'window_{index:02d}_{key}.csv',csv_bytes(result[key]))
+                metadata.append(meta)
+            archive.writestr('manifest.json',json.dumps(dict(windows=metadata,target=saved['target'],
+                data_hash=saved['data_hash'],version=VERSION,grids=GRIDS,evidence='Historical rolling holdout; no live business claim'),ensure_ascii=False,indent=2))
+        st.dataframe(pd.DataFrame(rows),hide_index=True)
+        st.download_button('下载全部滚动留出结果',buffer.getvalue(),'rolling-holdouts.zip','application/zip')

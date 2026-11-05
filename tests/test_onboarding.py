@@ -53,6 +53,7 @@ def test_reimport_keeps_current_inventory_until_a_valid_file_is_confirmed():
     assert not app.exception
     assert len(app.session_state['inventory']) == 20
     assert app.text_input(key='已完整覆盖的营业日期区间start').value == '2026-10-01'
+    app.radio(key='sales_import_mode').set_value('新建工作区（替换全部业务记录）').run()
     app.checkbox(key='sales_coverage_confirmed').check().run()
     click(app, '核验并使用此数据')
     assert app.session_state['product_names'] == {'001': '橡皮'}

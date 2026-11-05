@@ -1,5 +1,5 @@
 """Validate uploaded inventory before replacing the current session's data."""
-import math
+from .numbers import integer
 
 import pandas as pd
 
@@ -19,18 +19,7 @@ def parse_inventory(raw, required_columns):
         raise ValueError('商品编码不能为空或重复')
     for key in ['on_hand', 'on_order', 'lead_days', 'pack_size', 'min_order']:
         minimum = 1 if key in ['lead_days', 'pack_size'] else 0
-        values = []
-        for value in inv[key]:
-            try:
-                if pd.api.types.is_bool(value):
-                    raise ValueError()
-                number = float(value)
-                if not math.isfinite(number) or not number.is_integer() or number < minimum:
-                    raise ValueError()
-                values.append(int(number))
-            except (TypeError, ValueError, OverflowError):
-                raise ValueError(f'{key}须为不小于{minimum}的整数') from None
-        inv[key] = values
+        inv[key] = [integer(value, minimum) for value in inv[key]]
     confirmations = []
     for value in inv['arrival_confirmed']:
         if pd.api.types.is_bool(value):
@@ -40,11 +29,16 @@ def parse_inventory(raw, required_columns):
         else:
             raise ValueError('到货确认只能填写“是”或“否”')
     inv['arrival_confirmed'] = confirmations
+    normalized_dates = []
     for value in inv['as_of']:
         try:
             date = pd.to_datetime(value, format='%Y-%m-%d', errors='raise')
-            if pd.isna(date):
+            if pd.isna(date) or date.tzinfo is not None:
                 raise ValueError()
+            normalized_dates.append(str(date.date()))
         except (TypeError, ValueError):
             raise ValueError('库存快照日期须为有效的年-月-日') from None
+    inv['as_of'] = normalized_dates
     return inv
+
+APP_REVISION = "audit-fixes-20261104"

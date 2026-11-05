@@ -125,3 +125,5 @@ def simulation_dashboard(daily):
         with st.expander('模拟库存流水'):
             st.dataframe(pd.DataFrame(state['movements']).rename(columns=LABELS), hide_index=True)
     st.download_button('下载本次模拟完整记录', export_json(state), 'historical-simulation.json', 'application/json')
+
+APP_REVISION = "audit-fixes-20261104"

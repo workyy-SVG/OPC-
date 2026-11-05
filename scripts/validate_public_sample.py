@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--matrix', action='store_true', help='Compare a fixed 2x2x2 scenario matrix')
     args = parser.parse_args()
     raw = pd.read_csv(ROOT / 'data/demo/orders.csv', dtype=str)
-    clean, issues, summary = parse_orders(raw)
+    clean, issues, summary = parse_orders(raw, source="uci")
     daily = build_daily(clean, pd.date_range('2010-01-01', '2010-06-30'))
     # Fixed training-period-selected SKU; do not select by test-period performance.
     manifest = json.loads((ROOT / 'data/demo/manifest.json').read_text(encoding='utf-8'))

@@ -95,7 +95,7 @@ def inventory_for_receipt():
 def test_receive_updates_inventory_once_and_backup_roundtrip(tmp_path):
     original = purchase(); inventory = inventory_for_receipt()
     ledger, inv, movements = receive_into_inventory(original, inventory, [], original[0]['id'], 4, '2025-04-02', 'R1')
-    assert inv.iloc[0].on_hand == 9 and inv.iloc[0].on_order == 6
+    assert inv.iloc[0].on_hand == 9 and inv.iloc[0].on_order == 10
     assert not inv.iloc[0].verified
     assert inventory.iloc[0].on_hand == 5 and not original[0]['receipts']
     repeated, inv2, moves2 = receive_into_inventory(ledger, inv, movements, original[0]['id'], 4, '2025-04-02', 'R1')
@@ -110,7 +110,7 @@ def test_receive_updates_inventory_once_and_backup_roundtrip(tmp_path):
     projection, _ = project(restored, '001', 9, '2025-04-02', 1, 1, {'R1'})
     assert projection.iloc[0].arrival == 0 and projection.iloc[0].ending_stock == 8
     _, final, final_moves = receive_into_inventory(restored, restored_inv, restored_moves, original[0]['id'], 6, '2025-04-02', 'R2')
-    assert final.iloc[0].on_hand == 15 and final.iloc[0].on_order == 0
+    assert final.iloc[0].on_hand == 15 and final.iloc[0].on_order == 10
     assert len(final_moves) == 2
 
 

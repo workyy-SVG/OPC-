@@ -121,3 +121,26 @@ def run_holdout_study(daily, test_end, target=.9):
         'calibration': tuple(str(day.date()) for day in calibration),
         'test': tuple(str(day.date()) for day in test), 'target': target,
     }
+
+APP_REVISION = "audit-fixes-20261104"
+
+
+def run_rolling_holdout(daily, test_end, target=.9, windows=3):
+    """Predeclare non-overlapping 30-day holdouts; retain failed windows too."""
+    from .numbers import integer
+    windows=integer(windows,2,3)
+    end=pd.Timestamp(test_end).normalize()
+    if pd.isna(end): raise ValueError('留出期结束日期不合法')
+    output=[]
+    for offset in reversed(range(windows)):
+        current_end=end-pd.Timedelta(days=PERIOD_DAYS*offset)
+        calibration,test=experiment_periods(current_end)
+        item=dict(calibration=tuple(str(d.date()) for d in calibration),test=tuple(str(d.date()) for d in test))
+        try:
+            item['result']=run_holdout_study(daily[daily.date<=current_end],current_end,target)
+            item['error']=None
+        except ValueError as error:
+            item['result']=None
+            item['error']=str(error)
+        output.append(item)
+    return output

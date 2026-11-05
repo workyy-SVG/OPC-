@@ -222,3 +222,5 @@ def guide_example():
                f'保护期为 {lead + 1} 天，目标 {target} 件，缺口 {gap} 件。'
                + (f'满足起订量后按 {pack} 件/箱向上取整，建议 {qty} 件。' if gap else '现有库存已达到目标，建议 0 件。'),
                height=300)
+
+APP_REVISION = "audit-fixes-20261104"
