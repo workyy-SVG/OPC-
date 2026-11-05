@@ -7,7 +7,7 @@ from importlib import reload, import_module
 # are preserved; only older cached implementations are reloaded.
 for _module_name in ['core.numbers', 'core.storage', 'core.purchasing', 'core.inventory', 'core.ingest', 'core.policy', 'core.replay', 'core.validation', 'core.sales_update', 'core.study', 'core.holdout_study', 'core.simulation', 'core.ai_quota', 'core.ai', 'ui', 'results_ui', 'page_help', 'ai_ui', 'purchasing_ui', 'simulation_ui', 'holdout_ui']:
     _module = import_module(_module_name)
-    _expected_revision = 'purchase-submit-20261105' if _module_name in ('core.storage', 'core.ai_quota', 'purchasing_ui') else 'audit-fixes-20261104'
+    _expected_revision = 'tutorials-20261105' if _module_name == 'page_help' else 'purchase-submit-20261105' if _module_name in ('core.storage', 'core.ai_quota', 'purchasing_ui') else 'audit-fixes-20261104'
     if getattr(_module,'APP_REVISION',None) != _expected_revision:
         reload(_module)
 import ai_ui
@@ -26,7 +26,7 @@ for module in (ai_ui, page_help, purchasing_ui, results_ui, simulation_ui):
         reload(module)
 
 from ui import table_view, date_range, apply_theme, show_chart
-from page_help import PAGE_HELP, render_page_help
+from page_help import PAGE_HELP, render_page_help, render_tutorial
 from results_ui import (
     AMBER, COLORS, SLATE, TEAL, distribution, guide_example, inventory_chart,
     quality_charts, replay_comparison, replay_reading, scenario_charts, study_charts,
@@ -519,10 +519,8 @@ elif page=='使用指南':
         for q,a in [('为什么全部需要人工复核？','检查库存日期和交期，确认在途可按期到货。最近28天必须完整，还需至少20个已经结束的历史误差窗口；建议准备90天以上连续数据。'),('为什么上传后还没有建议？','上传只是读取文件，还需确认字段和日期区间，勾选覆盖确认并点击核验。然后进入库存配置。'),('能直接用Excel文件吗？','当前页面接收CSV。请在Excel中另存为CSV UTF-8，并将订单号、商品编码保留为文本。'),('关闭或刷新页面数据会保存吗？','数据主要保存在当前会话中。请及时下载库存模板、清单和实验结果；新会话需要重新导入。'),('会自动向供应商下单吗？','不会。导出的清单须由经营者审核后自行采购。'),('回放结果是否代表真实利润改善？','不代表。需求来自历史成交量，库存和缺货是模拟值；本工具尚未使用真实商户数据验证。')]:
             with st.expander(q): st.write(a)
     with tabs[4]:
-        for name, (purpose, next_use) in PAGE_HELP.items():
-            with st.expander(page_name(name)):
-                st.write(purpose)
-                st.write(next_use)
+        for name in PAGE_HELP:
+            render_tutorial(name)
         st.subheader('AI 辅助功能')
         st.markdown("""
 - **导入与质检 · 智能匹配表头**　先按常见列名匹配。启用 AI 后，可发送陌生列名辅助匹配，最终请核对必填字段。
@@ -700,6 +698,24 @@ else:
         st.button('下一步：查看补货建议 →',on_click=navigate,args=('补货清单',),type='primary')
     elif page=='补货清单':
         section('本次补货建议','建议下单：存在库存缺口；暂不补货：当前库存位置已达到目标；人工复核：信息不足，暂不给出数量。')
+        st.markdown('**清单来源**　本次已核验的销售记录 + 当前库存配置 + 已登记采购的有效在途，由补货规则计算建议件数；经营者审核后再确认采购。')
+        with st.expander('清单来源与生成依据'):
+            st.markdown('**1 · 销售数据从哪里来**')
+            st.write('数据来源：'+st.session_state.get('sales_source','用户上传的销售 CSV'))
+            span=st.session_state.get('coverage')
+            if span: st.write(f'已确认覆盖日期：{span[0]} 至 {span[1]}。决策日：{as_of.date()}。')
+            st.caption('本次销售数据指纹（SHA-256）：'+st.session_state.data_hash)
+            st.write('使用决策日前的已核验销量。取消、退货等按质检规则单列处理；缺少稳定订单行编号的疑似重复仍保留，需人工复核。')
+            st.markdown('**2 · 库存和采购条件从哪里来**')
+            st.write('现货、外部在途、交期、每箱件数和起订量来自「库存配置」。本项目已登记采购的剩余在途另外计入，避免把同一采购再填入外部在途。逾期或无法确认按期到达的采购会触发复核。')
+            table_view(chinese(st.session_state.inventory[[c for c in ('sku','as_of','source','parameter_kind','verified') if c in st.session_state.inventory]]),hide_index=True)
+            st.caption('样本中的销售来自 UCI 公开交易；预填现货和供应商条件是演示假设。真实门店数据以用户提供的销售文件、盘点表和采购凭据为依据。')
+            st.markdown('**3 · 建议件数怎样产生**')
+            st.write('默认使用历史误差缓冲规则：以最近 28 天均值估计日销量；保护期 = 交期 + 1 天；用已结束的历史误差窗口估计安全缓冲，取最近最多 60 个有效误差的 90% 分位数，下限为 0，至少需要 20 个窗口。')
+            st.code('目标库存 = 向上取整(日均销量 × 保护期 + 安全缓冲)\n库存位置 = 现货 + 可按期到达的外部在途 + 台账剩余在途\n库存缺口 = max(目标库存 − 库存位置, 0)\n有缺口时：建议件数 = 按每箱件数向上取整(max(库存缺口, 起订量))\n无缺口时：建议 0 件；资料不足时：人工复核，数量留空',language=None)
+            st.write('规则版本：'+VERSION+'。AI 仅辅助字段匹配、解释结果或识别采购草稿，不决定这里的建议数量。')
+            st.markdown('**4 · 建议如何成为采购记录**')
+            st.write('下载当前筛选的待人工确认清单，核对预算及供应商条件，再到「采购与到货」填写数量、日期和原因并确认登记。该台账来自人工确认，不是从供应商系统自动同步，也不会自动下单。')
         st.caption('每次进入本页均按当前库存重新计算。请先核对参数来源，再导出清单。')
         if usage_mode == '演示探索' and st.session_state.get('is_demo'):
             st.caption('示例默认每种商品只有 10 件现货。热销商品的建议件数可能较大。真实采购请先核对现货和交期。')
@@ -758,6 +774,16 @@ else:
                 with st.expander('查看完整计算字段'):
                     st.dataframe(pd.DataFrame(evidence), hide_index=True)
         download('导出待人工确认清单',chinese(filtered),'replenishment.csv')
+        provenance = dict(sales_source=st.session_state.get('sales_source','用户上传的销售 CSV'),
+            sales_sha256=st.session_state.data_hash, coverage=[str(value) for value in st.session_state.get('coverage',[])],
+            decision_date=str(as_of.date()), currency=st.session_state.get('sales_currency','CNY'), rule_version=VERSION,
+            rule='最近28天均值、交期加1天保护期、最近最多60个已结束误差窗口的非负90%分位缓冲，按起订量与箱规取整',
+            inventory=json.loads(st.session_state.inventory.to_json(orient='records')),
+            registered_purchases=st.session_state.get('purchases',[]),
+            filtered_recommendations=json.loads(filtered.to_json(orient='records')),
+            evidence_type='历史销量规则建议；演示库存是假设参数，真实采购须人工核对；不会自动向供应商下单')
+        st.download_button('下载清单来源与规则说明',json.dumps(provenance,ensure_ascii=False,indent=2),
+            'replenishment-source.json','application/json')
     elif page=='策略回放':
         section('设置两种补货方法的对照','给两种方法同一个商品、相同的初始库存和交期，像让两家店用各自的方式备货，再对比谁缺货更少、谁积货更多。')
         st.caption('固定比例缓冲在预计需求上加 20%。历史误差缓冲根据过去少估的件数预留库存。')
