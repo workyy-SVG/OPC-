@@ -244,29 +244,64 @@ if page=='经营总览':
     cols[1].metric('有效销售记录',st.session_state.get('summary',{}).get('valid','—'))
     cols[2].metric('待核对记录',len(st.session_state.issues) if 'issues' in st.session_state else '—')
     cols[3].metric('库存配置商品',len(st.session_state.inventory) if 'inventory' in st.session_state else '—')
-    left,right=st.columns([1.5,1])
-    with left:
-        section('我的工作任务','按顺序完成准备，再查看补货建议。统计仅基于当前会话数据。')
-        tasks=[('01','整理销售数据','导入并核验完整日期内的销售记录。','导入与质检',ready),('02','核对库存参数','填写真实现货、在途及供应商交期。','库存配置','inventory' in st.session_state),('03','审核补货建议','先解决人工复核，再检查下单数量。','补货清单',False),('04','比较历史策略','查看缺货与库存之间的取舍。','策略回放','replay_result' in st.session_state)]
-        for number,title,body,target,done in tasks:
-            with st.container(border=True):
-                st.markdown(f'**{number}　{title}**　'+('· 已有数据' if done else '· 待处理'))
-                st.caption(body)
-                st.button('打开'+page_name(target),key='home_'+target,on_click=navigate,args=(target,),disabled=target not in ['导入与质检'] and not ready)
-    with right:
-        with st.container(border=True):
-            st.subheader('建议下一步')
-            target='导入与质检' if not ready else '库存配置' if 'inventory' not in st.session_state else '补货清单'
-            st.write('当前建议：'+target)
-            st.button('继续处理 →',type='primary',on_click=navigate,args=(target,))
-            st.caption('库存中预填的数字仅为演示参数。已有配置不代表完成真实盘点。')
-        with st.container(border=True):
-            st.subheader('数据范围')
+    st.markdown('''<style>
+    .st-key-home_workspace{margin-top:12px}
+    .st-key-home_tasks,.st-key-home_context{background:#fff;border:1px solid #dce5ea;border-radius:18px;padding:24px;box-shadow:0 4px 18px #203d4c06}
+    .st-key-home_workspace [data-testid="stVerticalBlock"]{gap:12px}
+    .st-key-home_workspace .home-section-title{font-size:1.15rem;font-weight:750;color:#213d49;margin:0 0 6px;padding:0;line-height:1.4}
+    .home-section-note{font-size:.86rem;color:#647680;margin:0;line-height:1.6}
+    .home-task{display:flex;align-items:flex-start;gap:14px;padding:4px 0}
+    .home-step{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:10px;background:#edf2f5;color:#657b88;font-size:.8rem;font-weight:750}
+    .home-task-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px;color:#213d49;font-size:.95rem;font-weight:650;line-height:1.5}
+    .home-task p{font-size:.82rem;color:#627580;margin:5px 0 0;line-height:1.6}
+    .home-status{font-size:.7rem;font-weight:500;padding:2px 8px;border-radius:20px;background:#f0f3f5;color:#627580;white-space:nowrap}
+    .home-status.current{background:#e2f2ec;color:#176550}
+    .home-status.done{background:#eaf0fb;color:#426395}
+    .home-task.current .home-step{background:#217664;color:white}
+    [class*="st-key-home_task_row_"]{padding:12px 0;border-bottom:1px solid #edf1f4}
+    .st-key-home_task_row_04{border-bottom:0}
+    .st-key-home_workspace .stButton button{min-height:40px;font-size:.82rem;border-radius:9px}
+    .home-next{padding:16px 18px;background:#edf7f3;border:1px solid #d9ebe3;border-radius:12px}
+    .home-eyebrow{font-size:.75rem;letter-spacing:.06em;color:#548274;margin-bottom:6px}
+    .home-next strong{font-size:1.12rem;color:#1b5a49;line-height:1.5}
+    .home-next p{font-size:.82rem;color:#55736a;line-height:1.6;margin:6px 0 0}
+    .home-context-label{font-size:.85rem;font-weight:650;color:#294653;margin:0 0 6px}
+    .st-key-home_context hr{margin:6px 0;border-color:#edf1f4}
+    @media(max-width:900px){.st-key-home_workspace>[data-testid="stLayoutWrapper"]>.stHorizontalBlock{flex-direction:column}.st-key-home_workspace>[data-testid="stLayoutWrapper"]>.stHorizontalBlock>[data-testid="stColumn"]{width:100%!important;flex:1 1 100%!important}}
+    @media(max-width:640px){.st-key-home_tasks,.st-key-home_context{padding:18px}.home-task{gap:10px}}
+    </style>''',unsafe_allow_html=True)
+    next_target='导入与质检' if not ready else '库存配置' if 'inventory' not in st.session_state else '补货清单'
+    tasks=[('01','整理销售数据','导入并核验完整日期内的销售记录。','导入与质检',ready),('02','核对库存参数','填写真实现货、在途及供应商交期。','库存配置','inventory' in st.session_state),('03','审核补货建议','先解决人工复核，再检查下单数量。','补货清单',False),('04','比较历史策略','查看缺货与库存之间的取舍。','策略回放','replay_result' in st.session_state)]
+    with st.container(key='home_workspace'):
+        left,right=st.columns([1.8,1],gap='medium')
+        with left, st.container(key='home_tasks'):
+            st.markdown('<h3 class="home-section-title">我的工作任务</h3><p class="home-section-note">按步骤完成准备，再查看建议与策略对比。</p>',unsafe_allow_html=True)
+            for number,title,body,target,done in tasks:
+                available=target=='导入与质检' or ready
+                state='current' if target==next_target else 'done' if done else ''
+                status='当前步骤' if target==next_target else '已有数据' if done else '待处理' if available else '待导入'
+                with st.container(key='home_task_row_'+number):
+                    detail,action=st.columns([3,1.25],gap='small',vertical_alignment='center')
+                    with detail:
+                        st.markdown(f'<div class="home-task {state}"><span class="home-step">{number}</span><div><div class="home-task-title">{title}<span class="home-status {state}">{status}</span></div><p>{body}</p></div></div>',unsafe_allow_html=True)
+                    with action:
+                        action_label={'导入与质检':'导入数据','库存配置':'核对库存','补货清单':'查看建议','策略回放':'查看对比'}[target]
+                        st.button(action_label,key='home_'+target,on_click=navigate,args=(target,),disabled=not available,width='stretch',help='打开'+page_name(target))
+            st.caption('统计仅基于当前会话数据。已有库存配置不代表完成真实盘点。')
+        with right, st.container(key='home_context'):
+            st.markdown('<h3 class="home-section-title">建议下一步</h3>',unsafe_allow_html=True)
+            next_body=next(body for _,_,body,target,_ in tasks if target==next_target)
+            st.markdown(f'<div class="home-next"><div class="home-eyebrow">从这里继续</div><strong>{page_name(next_target)}</strong><p>{next_body}</p></div>',unsafe_allow_html=True)
+            st.button('继续处理 →',type='primary',on_click=navigate,args=(next_target,),width='stretch')
+            st.divider()
+            st.markdown('<div class="home-context-label">数据范围</div>',unsafe_allow_html=True)
             if ready:
-                st.write(str(st.session_state.daily.date.min().date())+' 至 '+str(st.session_state.daily.date.max().date()))
+                st.markdown('**'+str(st.session_state.daily.date.min().date())+' — '+str(st.session_state.daily.date.max().date())+'**')
                 st.caption('当前数据指纹：'+st.session_state.data_hash[:12])
-            else: st.info('尚未导入数据；可先使用内置 UCI 样本体验。')
-        st.button('查看五分钟使用指南',on_click=navigate,args=('使用指南',))
+            else:
+                st.caption('尚未导入销售数据，可先使用内置 UCI 样本体验。')
+            st.divider()
+            st.button('查看五分钟使用指南',on_click=navigate,args=('使用指南',),width='stretch')
     if ready:
         sales = st.session_state.daily.groupby('date', as_index=False).sold_qty.sum(min_count=1)
         sales = sales.rename(columns={'date':'日期','sold_qty':'销量（件）'})
